@@ -9,7 +9,7 @@ const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
 const { DynamoDBDocumentClient, PutCommand } = require("@aws-sdk/lib-dynamodb");
 
 // Configure the AWS SDK v3 for DynamoDB
-const REGION = "us-east-1"; // Change this to your preferred region
+const REGION = "us-west-2";
 const ddbClient = new DynamoDBClient({ region: REGION });
 const dynamoDB = DynamoDBDocumentClient.from(ddbClient);
 
@@ -35,9 +35,12 @@ io.on('connection', (socket) => {
   socket.on('joinGame', async (data) => {
     console.log(`Player ${socket.id} joined the game with data:`, data);
     
+    const environment = process.env.NODE_ENV || 'dev'; // Default to 'dev' if not set
+    const tableName = environment === 'prod' ? 'PlayerSessions-prod' : 'PlayerSessions-dev';
+
     // Prepare parameters to save the player's session in DynamoDB
     const params = {
-      TableName: 'PlayerSessions', // Ensure this table exists in DynamoDB
+      TableName: tableName,
       Item: {
         sessionId: socket.id,
         joinedAt: Date.now(),
