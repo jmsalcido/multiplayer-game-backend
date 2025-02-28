@@ -20,3 +20,22 @@ Thumbs.db
 # IDE or editor folders
 .vscode/
 .idea/
+
+# Terraform
+# Terraform directories and files
+.terraform/
+*.tfstate
+*.tfstate.backup
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Sensitive variable files
+terraform.tfvars
+*.auto.tfvars.json
+
+# CLI configuration files
+.terraformrc
+terraform.rc
