@@ -90,15 +90,62 @@ io.on('connection', (socket) => {
   });
 });
 
-// Game loop: update game state periodically (e.g., 30 times per second)
+// In-memory store for food pellets
+const foodPellets = [];
+
+// Maximum number of food pellets in the game world
+const MAX_FOOD = 50;
+
+// Define game boundaries (example: 800x600)
+const GAME_BOUNDARY = { width: 800, height: 600 };
+
+// Spawn food pellets randomly at intervals
+function spawnFood() {
+  if (foodPellets.length < MAX_FOOD) {
+    const newFood = {
+      id: `food-${Date.now()}-${Math.random()}`,
+      x: Math.random() * GAME_BOUNDARY.width,
+      y: Math.random() * GAME_BOUNDARY.height,
+      radius: 5  // Small pellets
+    };
+    foodPellets.push(newFood);
+  }
+}
+
+// Check collisions between a player and food
+function checkFoodCollisions() {
+  for (let pid in players) {
+    let player = players[pid];
+    for (let i = foodPellets.length - 1; i >= 0; i--) {
+      const pellet = foodPellets[i];
+      const dx = player.x - pellet.x;
+      const dy = player.y - pellet.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      if (distance < player.radius + pellet.radius) {
+        // Consume food: Increase player's area by a small percentage (e.g., 5%)
+        const playerArea = Math.PI * player.radius * player.radius;
+        const pelletArea = Math.PI * pellet.radius * pellet.radius;
+        const newArea = playerArea + pelletArea * 0.5; // 50% of pellet's area
+        player.radius = Math.sqrt(newArea / Math.PI);
+        player.score += 1;
+        // Remove the food pellet
+        foodPellets.splice(i, 1);
+      }
+    }
+  }
+}
+
+// Update the game loop to include food spawning and collisions
 const TICK_RATE = 1000 / 30;
 setInterval(() => {
-  updateGameState();
-  // Broadcast the updated game state to all clients
-  io.sockets.emit('gameState', players);
+  spawnFood();          // Spawn food pellets if below MAX_FOOD
+  updateGameState();    // Update player positions and collisions (players colliding with players)
+  checkFoodCollisions(); // Check and handle collisions between players and food
+  // Broadcast updated state (players and food) to clients
+  io.sockets.emit('gameState', { players, food: foodPellets });
 }, TICK_RATE);
 
-// Update positions and handle collisions
+// Update positions and handle collisions with boundaries and obstacles
 function updateGameState() {
   // Update each player's position based on their velocity
   for (let id in players) {
@@ -114,39 +161,47 @@ function updateGameState() {
   // Collision detection: Check every pair of players
   for (let i = 0; i < ids.length; i++) {
     const p1 = players[ids[i]];
-    if (!p1) continue;  // Check that p1 exists
+    if (!p1) continue;
 
     for (let j = i + 1; j < ids.length; j++) {
       const p2 = players[ids[j]];
-      if (!p2) continue;  // Check that p2 exists
+      if (!p2) continue;
 
       const dx = p1.x - p2.x;
       const dy = p1.y - p2.y;
       const distance = Math.sqrt(dx * dx + dy * dy);
 
       if (distance < p1.radius + p2.radius) {
-        // Determine which player will absorb the other.
-        if (p1.radius >= p2.radius) {
-          absorb(p1, p2);
-          io.to(p2.id).emit('absorbed');
-          // Remove p2 from the players object
-          delete players[p2.id];
+        // Determine relative difference in size as a ratio
+        const diff = Math.abs(p1.radius - p2.radius);
+        const threshold = 0.05 * Math.min(p1.radius, p2.radius); // 5% threshold
+
+        if (diff < threshold) {
+          // Sizes are nearly equal (or exactly equal): do nothing
+          continue;
         } else {
-          absorb(p2, p1);
-          io.to(p1.id).emit('absorbed');
-          delete players[p1.id];
-          break; // Break out of inner loop if p1 is removed
+          // Otherwise, the larger player absorbs the smaller one.
+          if (p1.radius > p2.radius) {
+            absorb(p1, p2);
+            io.to(p2.id).emit('absorbed');
+            delete players[p2.id];
+          } else {
+            absorb(p2, p1);
+            io.to(p1.id).emit('absorbed');
+            delete players[p1.id];
+            break;
+          }
         }
       }
     }
   }
 }
 
-// Helper function that makes 'larger' absorb 'smaller'
+// Helper function: larger absorbs smaller
 function absorb(larger, smaller) {
   const largerArea = Math.PI * larger.radius * larger.radius;
   const smallerArea = Math.PI * smaller.radius * smaller.radius;
-  // Absorb 50% of the smaller player's area (adjust factor as needed)
+  // Only absorb a fraction of the smaller player's area (here 50%)
   const newArea = largerArea + (smallerArea * 0.5);
   larger.radius = Math.sqrt(newArea / Math.PI);
   larger.score += 1;

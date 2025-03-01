@@ -14,31 +14,38 @@
   <h2>Multiplayer Game Test Client</h2>
   <canvas id="gameCanvas" width="800" height="600"></canvas>
   <script>
-    // Use the placeholder value that will be replaced during deployment
+    // The backend URL will be injected at deployment/build time.
     const backendUrl = "http://localhost:3000";
     const socket = io(backendUrl);
 
-    // Basic client logic to render the game state
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
 
-    let gameState = {};
+    // Local state for players and food received from the server
+    let players = {};
+    let food = [];
 
+    // On connect, join the game with initial position and size
     socket.on('connect', () => {
       console.log('Connected as:', socket.id);
-      socket.emit('joinGame', { x: 100, y: 100, radius: 20 });
+      socket.emit('joinGame', { x: 100, y: 100, radius: 20, username: 'Player' });
     });
 
+    // Update local game state whenever the server broadcasts an update
     socket.on('gameState', (state) => {
-      gameState = state;
+      // Expect state to be an object with 'players' and 'food'
+      players = state.players || {};
+      food = state.food || [];
     });
 
+    // Optional: notify when a player is absorbed
     socket.on('absorbed', () => {
       console.log('You have been absorbed!');
     });
 
-    // Simple key bindings for movement
-    let vx = 0, vy = 0, speed = 5;
+    // Movement controls: update player's velocity using arrow keys
+    let vx = 0, vy = 0;
+    const speed = 5;
     document.addEventListener('keydown', (event) => {
       switch (event.key) {
         case 'ArrowUp':    vy = -speed; break;
@@ -55,17 +62,34 @@
       }
     });
 
-    // Render loop
+    // Render the game state on the canvas
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      for (let id in gameState) {
-        const player = gameState[id];
+      
+      // Draw food pellets
+      food.forEach(pellet => {
+        ctx.beginPath();
+        ctx.arc(pellet.x, pellet.y, pellet.radius, 0, 2 * Math.PI);
+        ctx.fillStyle = 'green';
+        ctx.fill();
+      });
+
+      // Draw players
+      Object.keys(players).forEach(id => {
+        const player = players[id];
         ctx.beginPath();
         ctx.arc(player.x, player.y, player.radius, 0, 2 * Math.PI);
         ctx.fillStyle = (id === socket.id) ? 'blue' : 'red';
         ctx.fill();
         ctx.stroke();
-      }
+
+        // Optionally display the score and/or username
+        ctx.fillStyle = 'black';
+        ctx.font = "12px Arial";
+        const label = player.username ? player.username + " (" + player.score + ")" : player.score;
+        ctx.fillText(label, player.x - player.radius, player.y - player.radius - 5);
+      });
+      
       requestAnimationFrame(draw);
     }
     draw();
