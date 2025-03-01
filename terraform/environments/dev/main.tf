@@ -43,3 +43,13 @@ module "github_secrets" {
   aws_eb_application    = module.ebs.application_name
   aws_eb_environment    = module.ebs.environment_name
 }
+
+module "s3_bucket" {
+  source         = "../../modules/aws_s3_bucket"
+  bucket_name    = "jmsalcido-multiplayer-game-client-dev"  # Must be globally unique
+  index_document = "client.html"
+  error_document = "error.html"
+  object_key     = "client.html"
+  object_source  = "${path.module}/../../../client.html"
+  region         = var.aws_region
+}
