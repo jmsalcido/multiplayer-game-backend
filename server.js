@@ -108,32 +108,48 @@ function updateGameState() {
     // Optionally add boundary checks here
   }
 
-  // Simple collision detection: check each pair of players
+  // Get a snapshot of player IDs
   const ids = Object.keys(players);
+
+  // Collision detection: Check every pair of players
   for (let i = 0; i < ids.length; i++) {
+    const p1 = players[ids[i]];
+    if (!p1) continue;  // Check that p1 exists
+
     for (let j = i + 1; j < ids.length; j++) {
-      const p1 = players[ids[i]];
       const p2 = players[ids[j]];
+      if (!p2) continue;  // Check that p2 exists
+
       const dx = p1.x - p2.x;
       const dy = p1.y - p2.y;
       const distance = Math.sqrt(dx * dx + dy * dy);
-      
+
       if (distance < p1.radius + p2.radius) {
-        // Collision detected: larger player absorbs the smaller
+        // Determine which player will absorb the other.
         if (p1.radius >= p2.radius) {
-          p1.radius += p2.radius * 0.1;  // Growth factor
-          p1.score += 1;
-          io.to(p2.id).emit('absorbed'); // Inform the absorbed player
+          absorb(p1, p2);
+          io.to(p2.id).emit('absorbed');
+          // Remove p2 from the players object
           delete players[p2.id];
         } else {
-          p2.radius += p1.radius * 0.1;
-          p2.score += 1;
+          absorb(p2, p1);
           io.to(p1.id).emit('absorbed');
           delete players[p1.id];
+          break; // Break out of inner loop if p1 is removed
         }
       }
     }
   }
+}
+
+// Helper function that makes 'larger' absorb 'smaller'
+function absorb(larger, smaller) {
+  const largerArea = Math.PI * larger.radius * larger.radius;
+  const smallerArea = Math.PI * smaller.radius * smaller.radius;
+  // Absorb 50% of the smaller player's area (adjust factor as needed)
+  const newArea = largerArea + (smallerArea * 0.5);
+  larger.radius = Math.sqrt(newArea / Math.PI);
+  larger.score += 1;
 }
 
 // Start the server on a given port
