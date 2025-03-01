@@ -6,7 +6,7 @@ const socketIo = require('socket.io');
 
 // Import AWS SDK v3 clients
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, PutCommand } = require("@aws-sdk/lib-dynamodb");
+const { DynamoDBDocumentClient, PutCommand, UpdateCommand, ScanCommand } = require("@aws-sdk/lib-dynamodb");
 
 // Configure the AWS SDK v3 for DynamoDB
 const REGION = "us-west-2";
@@ -25,6 +25,31 @@ const io = socketIo(server, {
 // Basic route to verify that the server is running
 app.get('/', (req, res) => {
   res.send('Multiplayer Game Server is Running');
+});
+
+// Leaderboard endpoint: return top 10 players based on score
+app.get('/leaderboard', async (req, res) => {
+  // Determine the appropriate table based on environment
+  const environment = process.env.NODE_ENV || 'dev';
+  const tableName = environment === 'prod' ? 'PlayerSessions-prod' : 'PlayerSessions-dev';
+
+  try {
+    // Scan the entire table (note: acceptable for small datasets)
+    const command = new ScanCommand({ TableName: tableName });
+    const data = await dynamoDB.send(command);
+    const items = data.Items || [];
+
+    // Sort players by score in descending order
+    items.sort((a, b) => (b.score || 0) - (a.score || 0));
+
+    // Take the top 10 players
+    const leaderboard = items.slice(0, 10);
+
+    res.json({ leaderboard });
+  } catch (err) {
+    console.error('Error retrieving leaderboard:', err);
+    res.status(500).json({ error: 'Could not retrieve leaderboard' });
+  }
 });
 
 // In-memory store for active players in the game
@@ -83,10 +108,12 @@ io.on('connection', (socket) => {
   });
 
   // Handle disconnection: remove player from in-memory state.
-  socket.on('disconnect', () => {
+  socket.on('disconnect', async () => {
     console.log(`Player disconnected: ${socket.id}`);
-    delete players[socket.id];
-    // Optionally, you can also remove their session from DynamoDB here.
+    if (players[socket.id]) {
+      await updatePlayerSession(players[socket.id]);
+      delete players[socket.id];
+    }
   });
 });
 
@@ -206,6 +233,40 @@ function absorb(larger, smaller) {
   larger.radius = Math.sqrt(newArea / Math.PI);
   larger.score += 1;
 }
+
+async function updatePlayerSession(player) {
+  const environment = process.env.NODE_ENV || 'dev';
+  const tableName = environment === 'prod' ? 'PlayerSessions-prod' : 'PlayerSessions-dev';
+
+  const params = {
+    TableName: tableName,
+    Key: { sessionId: player.id },
+    UpdateExpression: "set score = :score, radius = :radius, x = :x, y = :y, updatedAt = :updatedAt",
+    ExpressionAttributeValues: {
+      ":score": player.score,
+      ":radius": player.radius,
+      ":x": player.x,
+      ":y": player.y,
+      ":updatedAt": Date.now()
+    }
+  };
+
+  try {
+    await dynamoDB.send(new UpdateCommand(params));
+  } catch (err) {
+    console.error(`Error updating session for player ${player.id}:`, err);
+  }
+}
+
+setInterval(() => {
+  const playerIDs = Object.keys(players);
+  playerIDs.forEach(async (id) => {
+    const player = players[id];
+    if (player) {
+      await updatePlayerSession(player);
+    }
+  });
+}, 5000); // Update every 5 seconds (adjust as needed)
 
 // Start the server on a given port
 const PORT = process.env.PORT || 3000;
