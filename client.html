@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Test Multiplayer Game Client</title>
+  <!-- Load Socket.io client from your server -->
+  <script src="http://localhost:3000/socket.io/socket.io.js"></script>
+</head>
+<body>
+  <h1>Test Multiplayer Game Client</h1>
+  <script>
+    const socket = io('http://localhost:3000');
+
+    socket.on('connect', () => {
+      console.log('Connected as:', socket.id);
+      // Emit a joinGame event with initial data
+      socket.emit('joinGame', { x: 100, y: 100, radius: 20 });
+    });
+
+    socket.on('gameState', (data) => {
+      console.log('Game State:', data);
+    });
+
+    socket.on('absorbed', () => {
+      console.log('You have been absorbed!');
+    });
+
+    // Simulate movement by sending a move event every second
+    setInterval(() => {
+      socket.emit('move', { vx: Math.random() * 2 - 1, vy: Math.random() * 2 - 1 });
+    }, 1000);
+  </script>
+</body>
+</html>
