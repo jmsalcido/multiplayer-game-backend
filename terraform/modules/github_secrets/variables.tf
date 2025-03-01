@@ -29,3 +29,13 @@ variable "aws_eb_environment" {
   description = "Elastic Beanstalk environment name"
   type        = string
 }
+
+variable "backend_url" {
+  description = "The publicly accessible backend URL for the Elastic Beanstalk environment"
+  type        = string
+}
+
+variable "s3_bucket_name" {
+  description = "The S3 bucket name to host the client"
+  type        = string
+}

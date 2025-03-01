@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>Multiplayer Game Test Client</title>
-  <script src="http://localhost:3000/socket.io/socket.io.js"></script>
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
   <style>
     body { font-family: Arial, sans-serif; }
     canvas { border: 1px solid #000; display: block; margin: 0 auto; }
@@ -14,33 +14,31 @@
   <h2>Multiplayer Game Test Client</h2>
   <canvas id="gameCanvas" width="800" height="600"></canvas>
   <script>
-    const socket = io('http://localhost:3000');
+    // Use the placeholder value that will be replaced during deployment
+    const backendUrl = "__BACKEND_URL__";
+    const socket = io(backendUrl);
+
+    // Basic client logic to render the game state
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
-    
-    // Local copy of the game state from the server
+
     let gameState = {};
 
-    // Connect to the server and join the game
     socket.on('connect', () => {
       console.log('Connected as:', socket.id);
-      // Send joinGame event with initial data
       socket.emit('joinGame', { x: 100, y: 100, radius: 20 });
     });
 
-    // Listen for game state updates from the server
     socket.on('gameState', (state) => {
       gameState = state;
     });
 
-    // Listen for collision/absorption event
     socket.on('absorbed', () => {
       console.log('You have been absorbed!');
     });
 
-    // Key bindings for movement
-    let vx = 0, vy = 0;
-    const speed = 5;
+    // Simple key bindings for movement
+    let vx = 0, vy = 0, speed = 5;
     document.addEventListener('keydown', (event) => {
       switch (event.key) {
         case 'ArrowUp':    vy = -speed; break;
@@ -50,36 +48,24 @@
       }
       socket.emit('move', { vx, vy });
     });
-
     document.addEventListener('keyup', (event) => {
       if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(event.key)) {
-        vx = 0;
-        vy = 0;
+        vx = 0; vy = 0;
         socket.emit('move', { vx, vy });
       }
     });
 
-    // Render the game state on the canvas
+    // Render loop
     function draw() {
-      // Clear the canvas
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
-      // Draw each player
       for (let id in gameState) {
         const player = gameState[id];
         ctx.beginPath();
         ctx.arc(player.x, player.y, player.radius, 0, 2 * Math.PI);
-        // Differentiate your player from others
         ctx.fillStyle = (id === socket.id) ? 'blue' : 'red';
         ctx.fill();
         ctx.stroke();
-
-        // Optionally display score near the player
-        ctx.fillStyle = 'black';
-        ctx.font = "12px Arial";
-        ctx.fillText(`Score: ${player.score}`, player.x - player.radius, player.y - player.radius - 5);
       }
-      
       requestAnimationFrame(draw);
     }
     draw();

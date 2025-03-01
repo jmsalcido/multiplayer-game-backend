@@ -34,16 +34,6 @@ module "ebs" {
   }
 }
 
-module "github_secrets" {
-  source                = "../../modules/github_secrets"
-  repository            = "multiplayer-game-backend"
-  aws_access_key_id     = var.aws_access_key_id
-  aws_secret_access_key = var.aws_secret_access_key
-  aws_region            = var.aws_region
-  aws_eb_application    = module.ebs.application_name
-  aws_eb_environment    = module.ebs.environment_name
-}
-
 module "s3_bucket" {
   source         = "../../modules/aws_s3_bucket"
   bucket_name    = "jmsalcido-multiplayer-game-client-dev"  # Must be globally unique
@@ -52,4 +42,16 @@ module "s3_bucket" {
   object_key     = "client.html"
   object_source  = "${path.module}/../../../client.html"
   region         = var.aws_region
+}
+
+module "github_secrets" {
+  source                = "../../modules/github_secrets"
+  repository            = "multiplayer-game-backend"
+  aws_access_key_id     = var.aws_access_key_id
+  aws_secret_access_key = var.aws_secret_access_key
+  aws_region            = var.aws_region
+  aws_eb_application    = module.ebs.application_name
+  aws_eb_environment    = module.ebs.environment_name
+  backend_url           = module.ebs.endpoint_url
+  s3_bucket_name        = module.s3_bucket.bucket_name
 }

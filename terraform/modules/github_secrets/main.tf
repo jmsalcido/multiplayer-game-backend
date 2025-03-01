@@ -27,3 +27,15 @@ resource "github_actions_secret" "aws_eb_environment" {
   secret_name     = "AWS_EB_ENVIRONMENT"
   plaintext_value = var.aws_eb_environment
 }
+
+resource "github_actions_secret" "backend_url" {
+  repository      = var.repository
+  secret_name     = "BACKEND_URL"
+  plaintext_value = var.backend_url
+}
+
+resource "github_actions_secret" "s3_bucket" {
+  repository      = var.repository
+  secret_name     = "S3_BUCKET"
+  plaintext_value = var.s3_bucket_name
+}
