@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Multiplayer Agar.io Clone</title>
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #222;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: Arial, sans-serif;
+      overflow: hidden;
+    }
+    #game-container {
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+    #username-form {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background-color: rgba(0, 0, 0, 0.8);
+      padding: 30px;
+      border-radius: 10px;
+      box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+      z-index: 10;
+      text-align: center;
+      color: white;
+      min-width: 300px;
+    }
+    #username-form h2 {
+      margin-top: 0;
+      color: #4CAF50;
+    }
+    #username-form input {
+      padding: 12px;
+      margin: 15px 0;
+      width: 100%;
+      border: none;
+      border-radius: 5px;
+      background-color: rgba(255, 255, 255, 0.9);
+      font-size: 16px;
+      box-sizing: border-box;
+    }
+    #username-form button {
+      padding: 12px 25px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: bold;
+      transition: background-color 0.3s;
+    }
+    #username-form button:hover {
+      background-color: #45a049;
+    }
+    #ui-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 5;
+    }
+    #leaderboard {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background-color: rgba(0, 0, 0, 0.7);
+      padding: 10px;
+      border-radius: 5px;
+      color: white;
+      min-width: 200px;
+      pointer-events: auto;
+    }
+    #leaderboard h3 {
+      margin-top: 0;
+      text-align: center;
+      color: #4CAF50;
+      border-bottom: 1px solid #4CAF50;
+      padding-bottom: 5px;
+    }
+    #leaderboard-content div {
+      padding: 3px 0;
+    }
+    #score-display {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background-color: rgba(0, 0, 0, 0.7);
+      padding: 10px;
+      border-radius: 5px;
+      color: white;
+      pointer-events: auto;
+    }
+    #connection-status {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      background-color: rgba(0, 0, 0, 0.7);
+      padding: 8px 12px;
+      border-radius: 5px;
+      color: white;
+      font-size: 14px;
+    }
+    #debug-toggle {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      background-color: #333;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-weight: bold;
+      pointer-events: auto;
+    }
+    .highlight {
+      color: #4CAF50;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div id="game-container">
+    <div id="username-form">
+      <h2>Enter Your Username</h2>
+      <input type="text" id="username-input" placeholder="Username" maxlength="15">
+      <button id="start-button">Start Game</button>
+    </div>
+    <div id="ui-container">
+      <div id="leaderboard">
+        <h3>Leaderboard</h3>
+        <div id="leaderboard-content"></div>
+      </div>
+      <div id="score-display">
+        <div>Score: <span id="score-value" class="highlight">0</span></div>
+        <div>Size: <span id="size-value" class="highlight">20</span></div>
+      </div>
+      <div id="connection-status">Disconnected</div>
+      <button id="debug-toggle">Debug: OFF</button>
+    </div>
+  </div>
+
+  <script>
+    class Game {
+      constructor() {
+        // Configuration
+        this.backendUrl = window.location.hostname === 'localhost' ? "http://localhost:3000" : window.location.origin;
+        this.socket = null;
+        this.username = '';
+        this.gameStarted = false;
+        this.debugMode = false;
+        
+        // Game state
+        this.playerSize = 20;
+        this.playerScore = 0;
+        this.players = {};
+        this.food = [];
+        this.worldSize = { width: 2000, height: 2000 };
+        
+        // DOM Elements
+        this.usernameForm = document.getElementById('username-form');
+        this.usernameInput = document.getElementById('username-input');
+        this.startButton = document.getElementById('start-button');
+        this.leaderboardContent = document.getElementById('leaderboard-content');
+        this.scoreValue = document.getElementById('score-value');
+        this.sizeValue = document.getElementById('size-value');
+        this.connectionStatus = document.getElementById('connection-status');
+        this.debugToggle = document.getElementById('debug-toggle');
+        
+        // Phaser game instance
+        this.phaserGame = null;
+        
+        // Initialize
+        this.init();
+      }
+      
+      init() {
+        // Set up event listeners
+        this.startButton.addEventListener('click', () => this.startGame());
+        this.debugToggle.addEventListener('click', () => this.toggleDebug());
+        
+        // Initialize Phaser game
+        this.initPhaser();
+      }
+      
+      initPhaser() {
+        const config = {
+          type: Phaser.AUTO,
+          width: window.innerWidth,
+          height: window.innerHeight,
+          parent: 'game-container',
+          backgroundColor: '#000000',
+          scene: {
+            preload: this.preload.bind(this),
+            create: this.create.bind(this),
+            update: this.update.bind(this)
+          },
+          physics: {
+            default: 'arcade',
+            arcade: {
+              debug: false
+            }
+          }
+        };
+        
+        this.phaserGame = new Phaser.Game(config);
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+          if (this.phaserGame) {
+            this.phaserGame.scale.resize(window.innerWidth, window.innerHeight);
+          }
+        });
+      }
+      
+      startGame() {
+        this.username = this.usernameInput.value.trim() || 'Player';
+        if (this.username) {
+          this.usernameForm.style.display = 'none';
+          this.connectToServer();
+        }
+      }
+      
+      connectToServer() {
+        try {
+          console.log('Connecting to server at:', this.backendUrl);
+          this.updateConnectionStatus('Connecting...', '#ffcc00');
+          
+          this.socket = io(this.backendUrl, {
+            reconnection: true,
+            reconnectionAttempts: 5,
+            reconnectionDelay: 1000,
+            timeout: 5000
+          });
+          
+          // Set up socket event handlers
+          this.socket.on('connect', () => this.handleConnect());
+          this.socket.on('connect_error', (error) => this.handleConnectError(error));
+          this.socket.on('gameState', (state) => this.handleGameState(state));
+          this.socket.on('absorbed', () => this.handleAbsorbed());
+          this.socket.on('disconnect', () => this.handleDisconnect());
+        } catch (error) {
+          console.error('Error connecting to server:', error);
+          this.updateConnectionStatus('Connection error', '#ff0000');
+        }
+      }
+      
+      handleConnect() {
+        console.log('Connected to server as:', this.socket.id);
+        this.updateConnectionStatus('Connected', '#4CAF50');
+        this.gameStarted = true;
+        
+        // Join the game with initial position
+        const startX = Math.random() * (this.worldSize.width - 100) + 50;
+        const startY = Math.random() * (this.worldSize.height - 100) + 50;
+        
+        this.socket.emit('joinGame', { 
+          x: startX, 
+          y: startY, 
+          radius: this.playerSize, 
+          username: this.username 
+        });
+        
+        console.log('Join game request sent');
+      }
+      
+      handleConnectError(error) {
+        console.error('Connection error:', error);
+        this.updateConnectionStatus('Connection error', '#ff0000');
+      }
+      
+      handleGameState(state) {
+        if (state.players && state.food) {
+          this.players = state.players;
+          this.food = state.food;
+          
+          // Update player data if exists
+          if (this.players[this.socket.id]) {
+            this.playerScore = this.players[this.socket.id].score || 0;
+            this.playerSize = this.players[this.socket.id].radius || 20;
+            
+            // Update UI
+            this.scoreValue.textContent = Math.floor(this.playerScore);
+            this.sizeValue.textContent = this.playerSize.toFixed(1);
+          }
+          
+          // Update leaderboard
+          this.updateLeaderboard();
+        }
+      }
+      
+      handleAbsorbed() {
+        console.log('You have been absorbed!');
+        this.gameOver();
+      }
+      
+      handleDisconnect() {
+        console.log('Disconnected from server');
+        this.updateConnectionStatus('Disconnected', '#ff0000');
+        this.gameStarted = false;
+      }
+      
+      updateConnectionStatus(message, color) {
+        this.connectionStatus.textContent = message;
+        this.connectionStatus.style.color = color;
+      }
+      
+      updateLeaderboard() {
+        // Sort players by score
+        const sortedPlayers = Object.values(this.players)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 10);
+        
+        // Update leaderboard HTML
+        this.leaderboardContent.innerHTML = '';
+        sortedPlayers.forEach((player, index) => {
+          const playerName = player.username || 'Unknown';
+          const isCurrentPlayer = player.id === this.socket.id;
+          const playerEntry = document.createElement('div');
+          playerEntry.textContent = `${index + 1}. ${playerName}: ${Math.floor(player.score)}`;
+          if (isCurrentPlayer) {
+            playerEntry.style.fontWeight = 'bold';
+            playerEntry.style.color = '#4CAF50';
+          }
+          this.leaderboardContent.appendChild(playerEntry);
+        });
+      }
+      
+      gameOver() {
+        if (!this.phaserGame || !this.phaserGame.scene.scenes[0]) return;
+        
+        const scene = this.phaserGame.scene.scenes[0];
+        
+        const gameOverText = scene.add.text(
+          this.phaserGame.config.width / 2,
+          this.phaserGame.config.height / 2,
+          'GAME OVER\nClick to restart',
+          { 
+            fontSize: '32px', 
+            fill: '#fff', 
+            align: 'center',
+            stroke: '#000',
+            strokeThickness: 5
+          }
+        ).setOrigin(0.5).setDepth(1000);
+        
+        scene.input.once('pointerdown', () => {
+          gameOverText.destroy();
+          this.usernameForm.style.display = 'block';
+          if (this.socket) {
+            this.socket.disconnect();
+          }
+          this.gameStarted = false;
+        });
+      }
+      
+      toggleDebug() {
+        this.debugMode = !this.debugMode;
+        
+        if (this.phaserGame && this.phaserGame.scene.scenes[0]) {
+          const scene = this.phaserGame.scene.scenes[0];
+          
+          if (scene.debugGraphics) {
+            scene.debugGraphics.setVisible(this.debugMode);
+          }
+          
+          if (scene.debugText) {
+            scene.debugText.setVisible(this.debugMode);
+          }
+        }
+        
+        // Update button appearance
+        if (this.debugMode) {
+          this.debugToggle.style.backgroundColor = '#4CAF50';
+          this.debugToggle.textContent = 'Debug: ON';
+        } else {
+          this.debugToggle.style.backgroundColor = '#333';
+          this.debugToggle.textContent = 'Debug: OFF';
+        }
+      }
+      
+      // Phaser game methods
+      preload() {
+        const scene = this.phaserGame.scene.scenes[0];
+        
+        // Load assets
+        scene.load.image('player', 'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/sprites/orb-blue.png');
+        scene.load.image('food', 'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/sprites/orb-green.png');
+        scene.load.image('enemy', 'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/sprites/orb-red.png');
+        scene.load.image('background', 'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/skies/space3.png');
+      }
+      
+      create() {
+        const scene = this.phaserGame.scene.scenes[0];
+        
+        // Create game world
+        scene.gameContainer = scene.add.container(0, 0);
+        
+        // Create background
+        scene.background = scene.add.tileSprite(0, 0, this.worldSize.width, this.worldSize.height, 'background')
+          .setOrigin(0, 0)
+          .setAlpha(0.5);
+        scene.gameContainer.add(scene.background);
+        
+        // Create grid lines
+        const graphics = scene.add.graphics();
+        graphics.lineStyle(1, 0xcccccc, 0.3);
+        
+        // Draw vertical grid lines
+        for (let x = 0; x < this.worldSize.width; x += 100) {
+          graphics.moveTo(x, 0);
+          graphics.lineTo(x, this.worldSize.height);
+        }
+        
+        // Draw horizontal grid lines
+        for (let y = 0; y < this.worldSize.height; y += 100) {
+          graphics.moveTo(0, y);
+          graphics.lineTo(this.worldSize.width, y);
+        }
+        
+        // Draw world boundary
+        graphics.lineStyle(3, 0xff0000, 0.8);
+        graphics.strokeRect(0, 0, this.worldSize.width, this.worldSize.height);
+        
+        graphics.strokePath();
+        scene.gameContainer.add(graphics);
+        
+        // Create player sprite
+        scene.playerContainer = scene.add.container(0, 0);
+        scene.playerSprite = scene.add.sprite(0, 0, 'player');
+        scene.playerSprite.setVisible(false); // Initially hidden until we have player data
+        scene.playerContainer.add(scene.playerSprite);
+        
+        // Add player name text
+        scene.playerNameText = scene.add.text(0, -30, this.username, { 
+          fontSize: '16px', 
+          fill: '#fff',
+          stroke: '#000',
+          strokeThickness: 3
+        }).setOrigin(0.5);
+        scene.playerContainer.add(scene.playerNameText);
+        
+        // Create containers for game objects
+        scene.foodContainer = scene.add.container(0, 0);
+        scene.otherPlayersContainer = scene.add.container(0, 0);
+        
+        // Add containers to main game container
+        scene.gameContainer.add(scene.foodContainer);
+        scene.gameContainer.add(scene.otherPlayersContainer);
+        scene.gameContainer.add(scene.playerContainer);
+        
+        // Set up camera
+        scene.cameras.main.setBounds(0, 0, this.worldSize.width, this.worldSize.height);
+        
+        // Add debug elements
+        scene.debugGraphics = scene.add.graphics().setScrollFactor(0).setDepth(1000).setVisible(this.debugMode);
+        
+        scene.debugText = scene.add.text(
+          20,
+          20,
+          'Debug Info',
+          { 
+            fontSize: '16px', 
+            fill: '#ffff00', 
+            backgroundColor: '#000000',
+            padding: { x: 10, y: 10 }
+          }
+        ).setScrollFactor(0).setDepth(1000).setVisible(this.debugMode);
+        
+        // Set up cursor keys for movement
+        scene.cursors = scene.input.keyboard.createCursorKeys();
+      }
+      
+      update() {
+        if (!this.gameStarted || !this.socket) return;
+        
+        const scene = this.phaserGame.scene.scenes[0];
+        
+        // Get player data
+        const playerData = this.players[this.socket.id];
+        if (!playerData) return;
+        
+        // Update player sprite and container
+        scene.playerSprite.setVisible(true);
+        scene.playerSprite.setScale(playerData.radius / 50); // Scale based on radius
+        
+        // Update player container position
+        scene.playerContainer.setPosition(playerData.x, playerData.y);
+        
+        // Update player name text
+        scene.playerNameText.setText(this.username);
+        scene.playerNameText.setPosition(0, -playerData.radius - 10);
+        
+        // Center camera on player
+        scene.cameras.main.centerOn(playerData.x, playerData.y);
+        
+        // Update debug info
+        if (this.debugMode && scene.debugText) {
+          const playerCount = Object.keys(this.players).length;
+          const otherPlayerCount = playerCount > 0 ? playerCount - 1 : 0;
+          
+          scene.debugText.setText(`
+            FPS: ${Math.round(this.phaserGame.loop.actualFps)}
+            Players: ${playerCount} (You + ${otherPlayerCount})
+            Food: ${this.food.length}
+            Position: (${Math.round(playerData.x)}, ${Math.round(playerData.y)})
+            Size: ${playerData.radius.toFixed(1)}
+            Score: ${playerData.score}
+            Socket ID: ${this.socket.id}
+          `);
+        }
+        
+        // Handle player movement input
+        let vx = 0;
+        let vy = 0;
+        
+        if (scene.cursors.left.isDown) {
+          vx = -5;
+        } else if (scene.cursors.right.isDown) {
+          vx = 5;
+        }
+        
+        if (scene.cursors.up.isDown) {
+          vy = -5;
+        } else if (scene.cursors.down.isDown) {
+          vy = 5;
+        }
+        
+        // Also handle mouse/touch input for movement
+        if (scene.input.activePointer.isDown) {
+          const pointer = scene.input.activePointer;
+          const worldPoint = scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
+          
+          // Calculate direction vector to pointer
+          const dx = worldPoint.x - playerData.x;
+          const dy = worldPoint.y - playerData.y;
+          
+          // Normalize and scale
+          const length = Math.sqrt(dx * dx + dy * dy);
+          if (length > 0) {
+            vx = (dx / length) * 5;
+            vy = (dy / length) * 5;
+          }
+        }
+        
+        // Send movement to server
+        if (vx !== 0 || vy !== 0) {
+          this.socket.emit('move', { vx, vy });
+        }
+        
+        // Update food sprites
+        this.updateFoodSprites(scene);
+        
+        // Update other player sprites
+        this.updateOtherPlayerSprites(scene);
+      }
+      
+      updateFoodSprites(scene) {
+        // Clear all food sprites
+        scene.foodContainer.removeAll(true);
+        
+        // Get camera view bounds to only render visible food
+        const camera = scene.cameras.main;
+        const cameraBounds = {
+          left: camera.scrollX - 100,
+          right: camera.scrollX + camera.width + 100,
+          top: camera.scrollY - 100,
+          bottom: camera.scrollY + camera.height + 100
+        };
+        
+        // Create new food sprites - only for food in or near the camera view
+        this.food.forEach(food => {
+          if (food && typeof food.x === 'number' && typeof food.y === 'number') {
+            // Only render food that's visible in the camera view (with some margin)
+            if (food.x >= cameraBounds.left && food.x <= cameraBounds.right && 
+                food.y >= cameraBounds.top && food.y <= cameraBounds.bottom) {
+              const sprite = scene.add.sprite(food.x, food.y, 'food');
+              sprite.setScale(food.radius / 25);
+              scene.foodContainer.add(sprite);
+            }
+          }
+        });
+      }
+      
+      updateOtherPlayerSprites(scene) {
+        // Clear all other player sprites
+        scene.otherPlayersContainer.removeAll(true);
+        
+        // Get camera view bounds
+        const camera = scene.cameras.main;
+        const cameraBounds = {
+          left: camera.scrollX - 200,
+          right: camera.scrollX + camera.width + 200,
+          top: camera.scrollY - 200,
+          bottom: camera.scrollY + camera.height + 200
+        };
+        
+        // Update or create sprites for current players
+        Object.keys(this.players).forEach(id => {
+          if (id === this.socket.id) return; // Skip the current player
+          
+          const player = this.players[id];
+          if (!player || typeof player.x !== 'number' || typeof player.y !== 'number') {
+            return;
+          }
+          
+          // Only render players that are visible in the camera view (with some margin)
+          if (player.x >= cameraBounds.left && player.x <= cameraBounds.right && 
+              player.y >= cameraBounds.top && player.y <= cameraBounds.bottom) {
+            
+            // Create player container
+            const playerContainer = scene.add.container(player.x, player.y);
+            
+            // Create player sprite
+            const playerSprite = scene.add.sprite(0, 0, 'enemy');
+            playerSprite.setScale(player.radius / 50);
+            playerContainer.add(playerSprite);
+            
+            // Create player name text
+            const playerText = scene.add.text(
+              0,
+              -player.radius - 10,
+              player.username || 'Player',
+              { 
+                fontSize: '16px', 
+                fill: '#fff',
+                stroke: '#000',
+                strokeThickness: 3
+              }
+            ).setOrigin(0.5);
+            playerContainer.add(playerText);
+            
+            // Add to container
+            scene.otherPlayersContainer.add(playerContainer);
+          }
+        });
+      }
+    }
+    
+    // Initialize the game when the page loads
+    window.onload = () => {
+      new Game();
+    };
+  </script>
+</body>
+</html> 

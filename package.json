@@ -6,6 +6,11 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "serve-client": "http-server . -c-1 -o client.html",
+    "serve-phaser": "http-server . -c-1 -o phaser-client.html",
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "open-client": "node open-client.js",
+    "start-game": "node start-game.js",
     "check-deps": "depcheck",
     "remove-unused-deps": "depcheck | grep 'Unused dependencies' | awk '{print $3}' | xargs npm uninstall"
   },
@@ -17,6 +22,12 @@
     "@aws-sdk/client-dynamodb": "^3.758.0",
     "@aws-sdk/lib-dynamodb": "^3.758.0",
     "express": "^4.21.2",
-    "socket.io": "^4.8.1"
+    "open": "^8.4.2",
+    "phaser": "^3.88.2",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
   }
 }

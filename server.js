@@ -3,6 +3,7 @@
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
+const path = require('path');
 
 // Import AWS SDK v3 clients
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
@@ -19,8 +20,13 @@ const server = http.createServer(app);
 
 // Setup Socket.io for real-time communication
 const io = socketIo(server, {
-  cors: { origin: "*" } // Adjust CORS settings as needed for production
+  cors: { origin: "*" }, // Adjust CORS settings as needed for production
+  pingTimeout: 60000,    // Increase ping timeout to prevent disconnections
+  pingInterval: 25000    // Adjust ping interval
 });
+
+// Serve static files from the root directory
+app.use(express.static(path.join(__dirname, '/')));
 
 // Basic route to verify that the server is running
 app.get('/', (req, res) => {
@@ -83,6 +89,7 @@ io.on('connection', (socket) => {
       console.log("Player session saved:", result);
     } catch (err) {
       console.error("Error saving session:", err);
+      // Continue even if DynamoDB fails - don't block the game
     }
 
     // Initialize the player's game state in memory.
@@ -94,8 +101,12 @@ io.on('connection', (socket) => {
       vx: 0,                    // Velocity x
       vy: 0,                    // Velocity y
       radius: data.radius || 20, // Player size
-      score: 0
+      score: 0,
+      username: data.username || 'Player'
     };
+    
+    // Send immediate game state update to the new player
+    socket.emit('gameState', { players, food: foodPellets });
   });
 
   // Listen for movement commands
@@ -111,7 +122,11 @@ io.on('connection', (socket) => {
   socket.on('disconnect', async () => {
     console.log(`Player disconnected: ${socket.id}`);
     if (players[socket.id]) {
-      await updatePlayerSession(players[socket.id]);
+      try {
+        await updatePlayerSession(players[socket.id]);
+      } catch (err) {
+        console.error(`Error updating session for disconnected player ${socket.id}:`, err);
+      }
       delete players[socket.id];
     }
   });
@@ -121,10 +136,10 @@ io.on('connection', (socket) => {
 const foodPellets = [];
 
 // Maximum number of food pellets in the game world
-const MAX_FOOD = 50;
+const MAX_FOOD = 100;
 
-// Define game boundaries (example: 800x600)
-const GAME_BOUNDARY = { width: 800, height: 600 };
+// Define game boundaries (match the client's world size)
+const GAME_BOUNDARY = { width: 2000, height: 2000 };
 
 // Spawn food pellets randomly at intervals
 function spawnFood() {
@@ -165,11 +180,16 @@ function checkFoodCollisions() {
 // Update the game loop to include food spawning and collisions
 const TICK_RATE = 1000 / 30;
 setInterval(() => {
-  spawnFood();          // Spawn food pellets if below MAX_FOOD
-  updateGameState();    // Update player positions and collisions (players colliding with players)
-  checkFoodCollisions(); // Check and handle collisions between players and food
-  // Broadcast updated state (players and food) to clients
-  io.sockets.emit('gameState', { players, food: foodPellets });
+  try {
+    spawnFood();          // Spawn food pellets if below MAX_FOOD
+    updateGameState();    // Update player positions and collisions (players colliding with players)
+    checkFoodCollisions(); // Check and handle collisions between players and food
+    
+    // Broadcast updated state (players and food) to clients
+    io.sockets.emit('gameState', { players, food: foodPellets });
+  } catch (error) {
+    console.error('Error in game loop:', error);
+  }
 }, TICK_RATE);
 
 // Update positions and handle collisions with boundaries and obstacles
@@ -179,7 +199,10 @@ function updateGameState() {
     let p = players[id];
     p.x += p.vx;
     p.y += p.vy;
-    // Optionally add boundary checks here
+    
+    // Add boundary checks
+    p.x = Math.max(p.radius, Math.min(GAME_BOUNDARY.width - p.radius, p.x));
+    p.y = Math.max(p.radius, Math.min(GAME_BOUNDARY.height - p.radius, p.y));
   }
 
   // Get a snapshot of player IDs

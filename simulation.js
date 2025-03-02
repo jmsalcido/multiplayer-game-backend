@@ -4,6 +4,7 @@ const io = require('socket.io-client');
 const NUM_PLAYERS = 10;
 const MOVE_INTERVAL = 1000; // Each player sends a move command every second
 const SERVER_URL = 'http://localhost:3000'; // Change if your server URL differs
+const GAME_BOUNDARY = { width: 2000, height: 2000 }; // Match the server and client
 
 // Create an array to store simulated player sockets
 const players = [];
@@ -17,9 +18,10 @@ function simulatePlayer() {
 
     // Emit joinGame event with a random starting position and a fixed radius
     socket.emit('joinGame', { 
-      x: Math.random() * 800, 
-      y: Math.random() * 600, 
-      radius: 20 
+      x: Math.random() * GAME_BOUNDARY.width, 
+      y: Math.random() * GAME_BOUNDARY.height, 
+      radius: 20,
+      username: `Bot-${Math.floor(Math.random() * 1000)}`
     });
 
     // Periodically send random move commands
