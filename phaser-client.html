@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Multiplayer Agar.io Clone</title>
   <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
@@ -231,6 +231,12 @@
             default: 'arcade',
             arcade: {
               debug: false
+            }
+          },
+          input: {
+            activePointers: 2, // Support multi-touch
+            touch: {
+              capture: true
             }
           }
         };
@@ -503,6 +509,22 @@
         
         // Set up cursor keys for movement
         scene.cursors = scene.input.keyboard.createCursorKeys();
+        
+        // Enhance touch controls for mobile
+        scene.input.on('pointerdown', (pointer) => {
+          scene.isPointerDown = true;
+          scene.activePointer = pointer;
+        });
+        
+        scene.input.on('pointermove', (pointer) => {
+          if (scene.isPointerDown) {
+            scene.activePointer = pointer;
+          }
+        });
+        
+        scene.input.on('pointerup', () => {
+          scene.isPointerDown = false;
+        });
       }
       
       update() {
@@ -548,6 +570,7 @@
         let vx = 0;
         let vy = 0;
         
+        // Keyboard controls
         if (scene.cursors.left.isDown) {
           vx = -5;
         } else if (scene.cursors.right.isDown) {
@@ -560,9 +583,13 @@
           vy = 5;
         }
         
-        // Also handle mouse/touch input for movement
-        if (scene.input.activePointer.isDown) {
-          const pointer = scene.input.activePointer;
+        // Touch/mouse controls - enhanced for better mobile experience
+        const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+        
+        // Use either the active pointer from events or the current pointer
+        const pointer = scene.activePointer || scene.input.activePointer;
+        
+        if ((isTouchDevice && scene.isPointerDown) || (!isTouchDevice && scene.input.activePointer.isDown)) {
           const worldPoint = scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
           
           // Calculate direction vector to pointer
@@ -572,8 +599,10 @@
           // Normalize and scale
           const length = Math.sqrt(dx * dx + dy * dy);
           if (length > 0) {
-            vx = (dx / length) * 5;
-            vy = (dy / length) * 5;
+            // Use a slightly higher speed for touch to make it more responsive
+            const speed = isTouchDevice ? 6 : 5;
+            vx = (dx / length) * speed;
+            vy = (dy / length) * speed;
           }
         }
         
