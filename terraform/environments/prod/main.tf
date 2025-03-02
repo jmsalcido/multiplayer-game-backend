@@ -38,10 +38,10 @@ module "ebs" {
 module "s3_bucket" {
   source         = "../../modules/aws_s3_bucket"
   bucket_name    = "jmsalcido-multiplayer-game-client-prod"  # Must be globally unique
-  index_document = "client.html"
+  index_document = "phaser-client.html"
   error_document = "error.html"
-  object_key     = "client.html"
-  object_source  = "${path.module}/../../../client.html"
+  object_key     = "phaser-client.html"
+  object_source  = "${path.module}/../../../phaser-client.html"
   region         = var.aws_region
 }
 

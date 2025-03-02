@@ -6,7 +6,7 @@ variable "bucket_name" {
 variable "index_document" {
   description = "The index document for the static website"
   type        = string
-  default     = "client.html"
+  default     = "phaser-client.html"
 }
 
 variable "error_document" {
@@ -18,7 +18,7 @@ variable "error_document" {
 variable "object_key" {
   description = "The key under which the client file will be stored"
   type        = string
-  default     = "client.html"
+  default     = "phaser-client.html"
 }
 
 variable "object_source" {
