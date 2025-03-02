@@ -504,7 +504,7 @@
         
         // Update player sprite and container
         scene.playerSprite.setVisible(true);
-        scene.playerSprite.setScale(playerData.radius / 50); // Scale based on radius
+        scene.playerSprite.setScale(playerData.radius / 25); // Changed from 50 to 25 for consistent scaling
         
         // Update player container position
         scene.playerContainer.setPosition(playerData.x, playerData.y);
@@ -597,7 +597,7 @@
             if (food.x >= cameraBounds.left && food.x <= cameraBounds.right && 
                 food.y >= cameraBounds.top && food.y <= cameraBounds.bottom) {
               const sprite = scene.add.sprite(food.x, food.y, 'food');
-              sprite.setScale(food.radius / 25);
+              sprite.setScale(food.radius / 15);
               scene.foodContainer.add(sprite);
             }
           }
@@ -635,7 +635,7 @@
             
             // Create player sprite
             const playerSprite = scene.add.sprite(0, 0, 'enemy');
-            playerSprite.setScale(player.radius / 50);
+            playerSprite.setScale(player.radius / 25); // Changed from 50 to 25 for consistent scaling
             playerContainer.add(playerSprite);
             
             // Create player name text
