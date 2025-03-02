@@ -543,26 +543,119 @@
         
         const scene = this.phaserGame.scene.scenes[0];
         
-        const gameOverText = scene.add.text(
+        // Create a dark overlay for the game over screen
+        const overlay = scene.add.rectangle(
+          0, 0,
+          this.phaserGame.config.width * 2,
+          this.phaserGame.config.height * 2,
+          0x000000, 0.7
+        ).setOrigin(0).setScrollFactor(0).setDepth(999);
+        
+        // Smoothly transition the camera back to center
+        scene.cameras.main.stopFollow();
+        scene.cameras.main.pan(
           this.phaserGame.config.width / 2,
           this.phaserGame.config.height / 2,
-          'GAME OVER\nClick to restart',
-          { 
-            fontSize: '32px', 
-            fill: '#fff', 
-            align: 'center',
-            stroke: '#000',
-            strokeThickness: 5
-          }
-        ).setOrigin(0.5).setDepth(1000);
+          1000, // Duration in ms
+          'Sine.easeOut'
+        );
         
-        scene.input.once('pointerdown', () => {
-          gameOverText.destroy();
-          this.usernameForm.style.display = 'block';
-          if (this.socket) {
-            this.socket.disconnect();
-          }
-          this.gameStarted = false;
+        // Wait for camera transition to complete before showing game over text
+        scene.time.delayedCall(1000, () => {
+          // Create game over text with animation
+          const gameOverText = scene.add.text(
+            this.phaserGame.config.width / 2,
+            this.phaserGame.config.height / 2 - 50,
+            'GAME OVER',
+            { 
+              fontSize: '48px', 
+              fontFamily: 'Arial',
+              fontWeight: 'bold',
+              fill: '#ff0000', 
+              align: 'center',
+              stroke: '#000',
+              strokeThickness: 6
+            }
+          ).setOrigin(0.5).setDepth(1000).setScrollFactor(0).setAlpha(0);
+          
+          // Add score display
+          const finalScore = scene.add.text(
+            this.phaserGame.config.width / 2,
+            this.phaserGame.config.height / 2 + 20,
+            `Final Score: ${Math.floor(this.playerScore)}`,
+            { 
+              fontSize: '32px', 
+              fontFamily: 'Arial',
+              fill: '#ffffff', 
+              align: 'center',
+              stroke: '#000',
+              strokeThickness: 4
+            }
+          ).setOrigin(0.5).setDepth(1000).setScrollFactor(0).setAlpha(0);
+          
+          // Add restart button
+          const restartButton = scene.add.text(
+            this.phaserGame.config.width / 2,
+            this.phaserGame.config.height / 2 + 100,
+            'Click to restart',
+            { 
+              fontSize: '24px', 
+              fontFamily: 'Arial',
+              fill: '#4CAF50', 
+              align: 'center',
+              stroke: '#000',
+              strokeThickness: 4,
+              backgroundColor: '#00000080',
+              padding: { x: 20, y: 10 }
+            }
+          ).setOrigin(0.5).setDepth(1000).setScrollFactor(0).setAlpha(0)
+           .setInteractive({ useHandCursor: true });
+          
+          // Fade in the game over elements
+          scene.tweens.add({
+            targets: [gameOverText, finalScore, restartButton],
+            alpha: 1,
+            duration: 500,
+            ease: 'Power2'
+          });
+          
+          // Add pulse animation to the restart button
+          scene.tweens.add({
+            targets: restartButton,
+            scaleX: 1.1,
+            scaleY: 1.1,
+            duration: 800,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.easeInOut'
+          });
+          
+          // Handle restart
+          restartButton.on('pointerdown', () => {
+            // Fade out everything
+            scene.tweens.add({
+              targets: [gameOverText, finalScore, restartButton, overlay],
+              alpha: 0,
+              duration: 300,
+              onComplete: () => {
+                // Clean up
+                gameOverText.destroy();
+                finalScore.destroy();
+                restartButton.destroy();
+                overlay.destroy();
+                
+                // Show username form
+                this.usernameForm.style.display = 'block';
+                
+                // Disconnect socket
+                if (this.socket) {
+                  this.socket.disconnect();
+                }
+                
+                this.gameStarted = false;
+              }
+            });
+          });
         });
       }
       
