@@ -167,6 +167,10 @@
             this.backendUrl = "http://localhost:3000";
           }
         }
+        
+        // Determine if we're in production
+        this.isProduction = this.backendUrl !== "http://localhost:3000";
+        
         this.socket = null;
         this.username = '';
         this.gameStarted = false;
@@ -199,7 +203,13 @@
       init() {
         // Set up event listeners
         this.startButton.addEventListener('click', () => this.startGame());
-        this.debugToggle.addEventListener('click', () => this.toggleDebug());
+        
+        // Only show debug toggle in development
+        if (this.isProduction) {
+          this.debugToggle.style.display = 'none';
+        } else {
+          this.debugToggle.addEventListener('click', () => this.toggleDebug());
+        }
         
         // Initialize Phaser game
         this.initPhaser();
@@ -474,20 +484,22 @@
         // Set up camera
         scene.cameras.main.setBounds(0, 0, this.worldSize.width, this.worldSize.height);
         
-        // Add debug elements
-        scene.debugGraphics = scene.add.graphics().setScrollFactor(0).setDepth(1000).setVisible(this.debugMode);
-        
-        scene.debugText = scene.add.text(
-          20,
-          20,
-          'Debug Info',
-          { 
-            fontSize: '16px', 
-            fill: '#ffff00', 
-            backgroundColor: '#000000',
-            padding: { x: 10, y: 10 }
-          }
-        ).setScrollFactor(0).setDepth(1000).setVisible(this.debugMode);
+        // Add debug elements only in development mode
+        if (!this.isProduction) {
+          scene.debugGraphics = scene.add.graphics().setScrollFactor(0).setDepth(1000).setVisible(this.debugMode);
+          
+          scene.debugText = scene.add.text(
+            20,
+            20,
+            'Debug Info',
+            { 
+              fontSize: '16px', 
+              fill: '#ffff00', 
+              backgroundColor: '#000000',
+              padding: { x: 10, y: 10 }
+            }
+          ).setScrollFactor(0).setDepth(1000).setVisible(this.debugMode);
+        }
         
         // Set up cursor keys for movement
         scene.cursors = scene.input.keyboard.createCursorKeys();
@@ -516,8 +528,8 @@
         // Center camera on player
         scene.cameras.main.centerOn(playerData.x, playerData.y);
         
-        // Update debug info
-        if (this.debugMode && scene.debugText) {
+        // Update debug info only in development mode
+        if (!this.isProduction && this.debugMode && scene.debugText) {
           const playerCount = Object.keys(this.players).length;
           const otherPlayerCount = playerCount > 0 ? playerCount - 1 : 0;
           
