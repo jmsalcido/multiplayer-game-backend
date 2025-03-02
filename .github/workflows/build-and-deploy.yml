@@ -38,13 +38,6 @@ jobs:
       - name: Replace backend URL placeholder in phaser-client.html
         run: sed -i "s|__BACKEND_URL__|${{ secrets.BACKEND_URL }}|g" phaser-client.html
 
-      - name: Deploy client.html to S3
-        run: aws s3 cp client.html s3://${{ secrets.S3_BUCKET }}/client.html
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-
       - name: Deploy phaser-client.html to S3
         run: aws s3 cp phaser-client.html s3://${{ secrets.S3_BUCKET }}/phaser-client.html
         env:
