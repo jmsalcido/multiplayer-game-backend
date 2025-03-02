@@ -53,6 +53,6 @@ module "github_secrets" {
   aws_region            = var.aws_region
   aws_eb_application    = module.ebs.application_name
   aws_eb_environment    = module.ebs.environment_name
-  backend_url           = module.ebs.endpoint_url
+  backend_url           = "http://${module.ebs.endpoint_url}"
   s3_bucket_name        = module.s3_bucket.bucket_name
 }
