@@ -21,8 +21,10 @@ const server = http.createServer(app);
 // Setup Socket.io for real-time communication
 const io = socketIo(server, {
   cors: { origin: "*" }, // Adjust CORS settings as needed for production
-  pingTimeout: 60000,    // Increase ping timeout to prevent disconnections
-  pingInterval: 25000    // Adjust ping interval
+  pingTimeout: 30000,    // Reduced ping timeout for faster reconnections
+  pingInterval: 10000,   // More frequent pings to detect disconnections faster
+  transports: ['websocket', 'polling'], // Prefer websocket for better performance
+  maxHttpBufferSize: 1e6 // 1MB max buffer size
 });
 
 // Serve static files from the root directory
@@ -60,6 +62,9 @@ app.get('/leaderboard', async (req, res) => {
 
 // In-memory store for active players in the game
 const players = {};
+
+// Track which players need DB updates
+const playersNeedingUpdate = new Set();
 
 // Socket.io connection handler
 io.on('connection', (socket) => {
@@ -102,11 +107,15 @@ io.on('connection', (socket) => {
       vy: 0,                    // Velocity y
       radius: data.radius || 20, // Player size
       score: 0,
-      username: data.username || 'Player'
+      username: data.username || 'Player',
+      lastUpdate: Date.now()    // Track last update time
     };
     
+    // Mark player for DB update
+    playersNeedingUpdate.add(socket.id);
+    
     // Send immediate game state update to the new player
-    socket.emit('gameState', { players, food: foodPellets });
+    sendGameStateToPlayer(socket.id);
   });
 
   // Listen for movement commands
@@ -115,6 +124,12 @@ io.on('connection', (socket) => {
       // Update the player's velocity based on the input data
       players[socket.id].vx = data.vx;
       players[socket.id].vy = data.vy;
+      players[socket.id].lastUpdate = Date.now();
+      
+      // Mark for DB update if significant change
+      if (Math.abs(data.vx) > 0.1 || Math.abs(data.vy) > 0.1) {
+        playersNeedingUpdate.add(socket.id);
+      }
     }
   });
 
@@ -124,6 +139,7 @@ io.on('connection', (socket) => {
     if (players[socket.id]) {
       try {
         await updatePlayerSession(players[socket.id]);
+        playersNeedingUpdate.delete(socket.id);
       } catch (err) {
         console.error(`Error updating session for disconnected player ${socket.id}:`, err);
       }
@@ -141,6 +157,71 @@ const MAX_FOOD = 100;
 // Define game boundaries (match the client's world size)
 const GAME_BOUNDARY = { width: 2000, height: 2000 };
 
+// Grid size for spatial partitioning
+const GRID_SIZE = 200;
+const grid = {};
+
+// Initialize spatial grid
+function initGrid() {
+  for (let x = 0; x < GAME_BOUNDARY.width; x += GRID_SIZE) {
+    for (let y = 0; y < GAME_BOUNDARY.height; y += GRID_SIZE) {
+      const cellKey = `${Math.floor(x/GRID_SIZE)},${Math.floor(y/GRID_SIZE)}`;
+      grid[cellKey] = { players: new Set(), food: new Set() };
+    }
+  }
+}
+
+// Initialize grid
+initGrid();
+
+// Get cell key for a position
+function getCellKey(x, y) {
+  return `${Math.floor(x/GRID_SIZE)},${Math.floor(y/GRID_SIZE)}`;
+}
+
+// Get neighboring cells
+function getNeighboringCells(x, y) {
+  const cellX = Math.floor(x/GRID_SIZE);
+  const cellY = Math.floor(y/GRID_SIZE);
+  const neighbors = [];
+  
+  for (let i = -1; i <= 1; i++) {
+    for (let j = -1; j <= 1; j++) {
+      const neighborKey = `${cellX + i},${cellY + j}`;
+      if (grid[neighborKey]) {
+        neighbors.push(neighborKey);
+      }
+    }
+  }
+  
+  return neighbors;
+}
+
+// Update entity position in grid
+function updateEntityInGrid(id, oldX, oldY, newX, newY, isPlayer) {
+  // Remove from old cell
+  if (oldX !== undefined && oldY !== undefined) {
+    const oldCellKey = getCellKey(oldX, oldY);
+    if (grid[oldCellKey]) {
+      if (isPlayer) {
+        grid[oldCellKey].players.delete(id);
+      } else {
+        grid[oldCellKey].food.delete(id);
+      }
+    }
+  }
+  
+  // Add to new cell
+  const newCellKey = getCellKey(newX, newY);
+  if (grid[newCellKey]) {
+    if (isPlayer) {
+      grid[newCellKey].players.add(id);
+    } else {
+      grid[newCellKey].food.add(id);
+    }
+  }
+}
+
 // Spawn food pellets randomly at intervals
 function spawnFood() {
   if (foodPellets.length < MAX_FOOD) {
@@ -151,6 +232,9 @@ function spawnFood() {
       radius: 5  // Small pellets
     };
     foodPellets.push(newFood);
+    
+    // Add to spatial grid
+    updateEntityInGrid(newFood.id, undefined, undefined, newFood.x, newFood.y, false);
   }
 }
 
@@ -158,23 +242,92 @@ function spawnFood() {
 function checkFoodCollisions() {
   for (let pid in players) {
     let player = players[pid];
+    
+    // Get neighboring cells for this player
+    const neighborCells = getNeighboringCells(player.x, player.y);
+    const nearbyFoodIds = new Set();
+    
+    // Collect food IDs from neighboring cells
+    neighborCells.forEach(cellKey => {
+      if (grid[cellKey]) {
+        grid[cellKey].food.forEach(foodId => {
+          nearbyFoodIds.add(foodId);
+        });
+      }
+    });
+    
+    // Check collisions only with nearby food
     for (let i = foodPellets.length - 1; i >= 0; i--) {
       const pellet = foodPellets[i];
+      
+      // Skip if not in nearby cells
+      if (!nearbyFoodIds.has(pellet.id)) continue;
+      
       const dx = player.x - pellet.x;
       const dy = player.y - pellet.y;
       const distance = Math.sqrt(dx * dx + dy * dy);
       if (distance < player.radius + pellet.radius) {
-        // Consume food: Increase player's area by a small percentage (e.g., 5%)
+        // Consume food: Increase player's area by a small percentage
         const playerArea = Math.PI * player.radius * player.radius;
         const pelletArea = Math.PI * pellet.radius * pellet.radius;
         const newArea = playerArea + pelletArea * 0.5; // 50% of pellet's area
         player.radius = Math.sqrt(newArea / Math.PI);
         player.score += 1;
+        
+        // Mark player for DB update
+        playersNeedingUpdate.add(pid);
+        
+        // Remove from grid
+        updateEntityInGrid(pellet.id, pellet.x, pellet.y, undefined, undefined, false);
+        
         // Remove the food pellet
         foodPellets.splice(i, 1);
       }
     }
   }
+}
+
+// Send game state to a specific player
+function sendGameStateToPlayer(playerId) {
+  const player = players[playerId];
+  if (!player) return;
+  
+  // Get neighboring cells for this player
+  const neighborCells = getNeighboringCells(player.x, player.y);
+  const nearbyPlayerIds = new Set();
+  const nearbyFoodIds = new Set();
+  
+  // Collect entity IDs from neighboring cells
+  neighborCells.forEach(cellKey => {
+    if (grid[cellKey]) {
+      grid[cellKey].players.forEach(id => {
+        nearbyPlayerIds.add(id);
+      });
+      grid[cellKey].food.forEach(id => {
+        nearbyFoodIds.add(id);
+      });
+    }
+  });
+  
+  // Always include the player themselves
+  nearbyPlayerIds.add(playerId);
+  
+  // Filter players and food to only those nearby
+  const nearbyPlayers = {};
+  nearbyPlayerIds.forEach(id => {
+    if (players[id]) {
+      nearbyPlayers[id] = players[id];
+    }
+  });
+  
+  const nearbyFood = foodPellets.filter(food => nearbyFoodIds.has(food.id));
+  
+  // Send filtered game state to this player
+  io.to(playerId).emit('gameState', { 
+    players: nearbyPlayers, 
+    food: nearbyFood,
+    fullPlayerCount: Object.keys(players).length // Send total player count for UI
+  });
 }
 
 // Update the game loop to include food spawning and collisions
@@ -185,8 +338,10 @@ setInterval(() => {
     updateGameState();    // Update player positions and collisions (players colliding with players)
     checkFoodCollisions(); // Check and handle collisions between players and food
     
-    // Broadcast updated state (players and food) to clients
-    io.sockets.emit('gameState', { players, food: foodPellets });
+    // Update each player's grid position and send them relevant game state
+    for (let id in players) {
+      sendGameStateToPlayer(id);
+    }
   } catch (error) {
     console.error('Error in game loop:', error);
   }
@@ -197,26 +352,47 @@ function updateGameState() {
   // Update each player's position based on their velocity
   for (let id in players) {
     let p = players[id];
+    const oldX = p.x;
+    const oldY = p.y;
+    
     p.x += p.vx;
     p.y += p.vy;
     
     // Add boundary checks
     p.x = Math.max(p.radius, Math.min(GAME_BOUNDARY.width - p.radius, p.x));
     p.y = Math.max(p.radius, Math.min(GAME_BOUNDARY.height - p.radius, p.y));
+    
+    // Update grid position if moved
+    if (oldX !== p.x || oldY !== p.y) {
+      updateEntityInGrid(id, oldX, oldY, p.x, p.y, true);
+    }
   }
 
-  // Get a snapshot of player IDs
-  const ids = Object.keys(players);
-
-  // Collision detection: Check every pair of players
-  for (let i = 0; i < ids.length; i++) {
-    const p1 = players[ids[i]];
+  // Collision detection using spatial partitioning
+  for (let id in players) {
+    const p1 = players[id];
     if (!p1) continue;
-
-    for (let j = i + 1; j < ids.length; j++) {
-      const p2 = players[ids[j]];
+    
+    // Get neighboring cells for this player
+    const neighborCells = getNeighboringCells(p1.x, p1.y);
+    const nearbyPlayerIds = new Set();
+    
+    // Collect player IDs from neighboring cells
+    neighborCells.forEach(cellKey => {
+      if (grid[cellKey]) {
+        grid[cellKey].players.forEach(pid => {
+          if (pid !== id) { // Don't include self
+            nearbyPlayerIds.add(pid);
+          }
+        });
+      }
+    });
+    
+    // Check collisions only with nearby players
+    for (const otherId of nearbyPlayerIds) {
+      const p2 = players[otherId];
       if (!p2) continue;
-
+      
       const dx = p1.x - p2.x;
       const dy = p1.y - p2.y;
       const distance = Math.sqrt(dx * dx + dy * dy);
@@ -234,11 +410,21 @@ function updateGameState() {
           if (p1.radius > p2.radius) {
             absorb(p1, p2);
             io.to(p2.id).emit('absorbed');
+            
+            // Remove from grid
+            updateEntityInGrid(p2.id, p2.x, p2.y, undefined, undefined, true);
+            
             delete players[p2.id];
+            playersNeedingUpdate.add(id); // Mark absorber for update
           } else {
             absorb(p2, p1);
             io.to(p1.id).emit('absorbed');
+            
+            // Remove from grid
+            updateEntityInGrid(p1.id, p1.x, p1.y, undefined, undefined, true);
+            
             delete players[p1.id];
+            playersNeedingUpdate.add(otherId); // Mark absorber for update
             break;
           }
         }
@@ -281,15 +467,31 @@ async function updatePlayerSession(player) {
   }
 }
 
-setInterval(() => {
-  const playerIDs = Object.keys(players);
-  playerIDs.forEach(async (id) => {
-    const player = players[id];
-    if (player) {
-      await updatePlayerSession(player);
-    }
-  });
-}, 5000); // Update every 5 seconds (adjust as needed)
+// Batch update players to DynamoDB less frequently
+setInterval(async () => {
+  // Process players that need updates in batches
+  const batchSize = 5;
+  const playerIds = Array.from(playersNeedingUpdate);
+  
+  for (let i = 0; i < playerIds.length; i += batchSize) {
+    const batch = playerIds.slice(i, i + batchSize);
+    
+    // Process batch in parallel
+    await Promise.all(batch.map(async (id) => {
+      const player = players[id];
+      if (player) {
+        try {
+          await updatePlayerSession(player);
+          playersNeedingUpdate.delete(id);
+        } catch (err) {
+          console.error(`Error in batch update for player ${id}:`, err);
+        }
+      } else {
+        playersNeedingUpdate.delete(id);
+      }
+    }));
+  }
+}, 10000); // Update every 10 seconds
 
 // Start the server on a given port
 const PORT = process.env.PORT || 3000;
