@@ -185,6 +185,17 @@
         this.gridCells = {};
         this.gridSize = 200;
         
+        // Client-side prediction
+        this.lastMoveSent = { vx: 0, vy: 0, timestamp: 0 };
+        this.pendingInputs = [];
+        this.serverUpdateRate = 1000 / 30; // Server update rate in ms
+        this.lastServerUpdate = 0;
+        
+        // Direct movement system
+        this.movementTarget = null; // Target position for movement
+        this.movementSpeed = 5; // Base movement speed
+        this.lastPosition = { x: 0, y: 0 }; // Last position for prediction
+        
         // Entity caching for smooth transitions
         this.entityCache = {
           players: {}, // Format: {id: {entity, lastSeen, alpha}}
@@ -330,8 +341,11 @@
       }
       
       handleGameState(state) {
-        if (state.players && state.food) {
-          // Update the current game state
+        // Store timestamp of server update
+        this.lastServerUpdate = Date.now();
+        
+        if (state.fullUpdate === true) {
+          // Handle full update
           this.players = state.players;
           this.food = state.food;
           this.fullPlayerCount = state.fullPlayerCount || Object.keys(state.players).length;
@@ -340,66 +354,134 @@
           this.visibleCellsX = state.visibleCellsX || 0;
           this.visibleCellsY = state.visibleCellsY || 0;
           this.leaderboardData = state.leaderboard || [];
+        } else {
+          // Handle delta update
           
-          // Mark all current entities as seen
-          const now = Date.now();
-          
-          // Update player cache
-          Object.keys(this.players).forEach(id => {
-            if (!this.entityCache.players[id]) {
-              // New player - add to cache with fade-in
-              this.entityCache.players[id] = {
-                entity: this.players[id],
-                lastSeen: now,
-                alpha: 0 // Start invisible and fade in
-              };
-            } else {
-              // Existing player - update data and mark as seen
-              this.entityCache.players[id].entity = this.players[id];
-              this.entityCache.players[id].lastSeen = now;
-              // If fading in, continue fade in, otherwise set to fully visible
-              if (this.entityCache.players[id].alpha < 1) {
-                // Continue fading in
-              } else {
-                this.entityCache.players[id].alpha = 1;
-              }
+          // Update players with delta
+          if (state.playersDelta) {
+            for (const id in state.playersDelta) {
+              this.players[id] = state.playersDelta[id];
             }
-          });
-          
-          // Update food cache
-          this.food.forEach(food => {
-            if (!this.entityCache.food[food.id]) {
-              // New food - add to cache with fade-in
-              this.entityCache.food[food.id] = {
-                entity: food,
-                lastSeen: now,
-                alpha: 0 // Start invisible and fade in
-              };
-            } else {
-              // Existing food - update data and mark as seen
-              this.entityCache.food[food.id].entity = food;
-              this.entityCache.food[food.id].lastSeen = now;
-              // If fading in, continue fade in, otherwise set to fully visible
-              if (this.entityCache.food[food.id].alpha < 1) {
-                // Continue fading in
-              } else {
-                this.entityCache.food[food.id].alpha = 1;
-              }
-            }
-          });
-          
-          // Update player data if exists
-          if (this.players[this.socket.id]) {
-            this.playerScore = this.players[this.socket.id].score || 0;
-            this.playerSize = this.players[this.socket.id].radius || 20;
-            
-            // Update UI
-            this.scoreValue.textContent = Math.floor(this.playerScore);
-            this.sizeValue.textContent = this.playerSize.toFixed(1);
           }
           
-          // Update leaderboard
-          this.updateLeaderboard();
+          // Remove players that are no longer visible
+          if (state.removedPlayers) {
+            for (const id of state.removedPlayers) {
+              delete this.players[id];
+            }
+          }
+          
+          // Add new food
+          if (state.newFood) {
+            // Add new food items to the existing array
+            this.food = this.food.filter(food => 
+              !state.removedFood || !state.removedFood.includes(food.id)
+            ).concat(state.newFood);
+          }
+          
+          // Update other state properties
+          if (state.fullPlayerCount !== undefined) {
+            this.fullPlayerCount = state.fullPlayerCount;
+          }
+          
+          if (state.leaderboard) {
+            this.leaderboardData = state.leaderboard;
+          }
+        }
+        
+        // If we have our own player data, reconcile with client-side prediction
+        if (this.socket && this.players[this.socket.id]) {
+          this.reconcileClientPrediction(this.players[this.socket.id]);
+        }
+        
+        // Mark all current entities as seen
+        const now = Date.now();
+        
+        // Update player cache
+        Object.keys(this.players).forEach(id => {
+          if (!this.entityCache.players[id]) {
+            // New player - add to cache with fade-in
+            this.entityCache.players[id] = {
+              entity: this.players[id],
+              lastSeen: now,
+              alpha: 0 // Start invisible and fade in
+            };
+          } else {
+            // Existing player - update data and mark as seen
+            this.entityCache.players[id].entity = this.players[id];
+            this.entityCache.players[id].lastSeen = now;
+            // If fading in, continue fade in, otherwise set to fully visible
+            if (this.entityCache.players[id].alpha < 1) {
+              // Continue fading in
+            } else {
+              this.entityCache.players[id].alpha = 1;
+            }
+          }
+        });
+        
+        // Update food cache
+        this.food.forEach(food => {
+          if (!this.entityCache.food[food.id]) {
+            // New food - add to cache with fade-in
+            this.entityCache.food[food.id] = {
+              entity: food,
+              lastSeen: now,
+              alpha: 0 // Start invisible and fade in
+            };
+          } else {
+            // Existing food - update data and mark as seen
+            this.entityCache.food[food.id].entity = food;
+            this.entityCache.food[food.id].lastSeen = now;
+            // If fading in, continue fade in, otherwise set to fully visible
+            if (this.entityCache.food[food.id].alpha < 1) {
+              // Continue fading in
+            } else {
+              this.entityCache.food[food.id].alpha = 1;
+            }
+          }
+        });
+        
+        // Update player data if exists
+        if (this.players[this.socket.id]) {
+          this.playerScore = this.players[this.socket.id].score || 0;
+          this.playerSize = this.players[this.socket.id].radius || 20;
+          
+          // Update UI
+          this.scoreValue.textContent = Math.floor(this.playerScore);
+          this.sizeValue.textContent = this.playerSize.toFixed(1);
+        }
+        
+        // Update leaderboard
+        this.updateLeaderboard();
+      }
+      
+      // New method for client-side prediction reconciliation
+      reconcileClientPrediction(serverPlayerState) {
+        // Remove processed inputs
+        const now = Date.now();
+        this.pendingInputs = this.pendingInputs.filter(input => {
+          return input.timestamp > serverPlayerState.lastUpdate;
+        });
+        
+        // If server position is significantly different from our position, update immediately
+        const currentX = this.players[this.socket.id].x;
+        const currentY = this.players[this.socket.id].y;
+        
+        const diffX = Math.abs(serverPlayerState.x - currentX);
+        const diffY = Math.abs(serverPlayerState.y - currentY);
+        
+        // If difference is significant, snap to server position
+        if (diffX > 20 || diffY > 20) {
+          this.players[this.socket.id].x = serverPlayerState.x;
+          this.players[this.socket.id].y = serverPlayerState.y;
+          
+          // Also update last position for prediction
+          this.lastPosition = { 
+            x: serverPlayerState.x, 
+            y: serverPlayerState.y 
+          };
+          
+          console.log("Position corrected by server");
         }
       }
       
@@ -634,7 +716,7 @@
         
         // Update player sprite and container
         scene.playerSprite.setVisible(true);
-        scene.playerSprite.setScale(playerData.radius / 25); // Changed from 50 to 25 for consistent scaling
+        scene.playerSprite.setScale(playerData.radius / 25);
         
         // Update player container position
         scene.playerContainer.setPosition(playerData.x, playerData.y);
@@ -659,6 +741,7 @@
           const totalCells = 100; // 10x10 grid
           const viewportCellsX = Math.ceil(window.innerWidth / this.gridSize) + 2;
           const viewportCellsY = Math.ceil(window.innerHeight / this.gridSize) + 2;
+          const timeSinceLastUpdate = Date.now() - this.lastServerUpdate;
           
           scene.debugText.setText(`
             FPS: ${Math.round(this.phaserGame.loop.actualFps)}
@@ -672,6 +755,9 @@
             Size: ${playerData.radius.toFixed(1)}
             Score: ${playerData.score}
             Socket ID: ${this.socket.id}
+            Last Server Update: ${timeSinceLastUpdate}ms ago
+            Pending Inputs: ${this.pendingInputs.length}
+            Movement Target: ${this.movementTarget ? `(${Math.round(this.movementTarget.x)}, ${Math.round(this.movementTarget.y)})` : 'None'}
           `);
         }
         
@@ -681,43 +767,92 @@
         
         // Keyboard controls
         if (scene.cursors.left.isDown) {
-          vx = -5;
+          vx = -this.movementSpeed;
+          this.movementTarget = null; // Cancel any touch/mouse target when using keyboard
         } else if (scene.cursors.right.isDown) {
-          vx = 5;
+          vx = this.movementSpeed;
+          this.movementTarget = null; // Cancel any touch/mouse target when using keyboard
         }
         
         if (scene.cursors.up.isDown) {
-          vy = -5;
+          vy = -this.movementSpeed;
+          this.movementTarget = null; // Cancel any touch/mouse target when using keyboard
         } else if (scene.cursors.down.isDown) {
-          vy = 5;
+          vy = this.movementSpeed;
+          this.movementTarget = null; // Cancel any touch/mouse target when using keyboard
         }
         
-        // Touch/mouse controls - enhanced for better mobile experience
+        // Touch/mouse controls - completely redesigned for better responsiveness
         const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-        
-        // Use either the active pointer from events or the current pointer
         const pointer = scene.activePointer || scene.input.activePointer;
         
+        // Handle new touch/click
         if ((isTouchDevice && scene.isPointerDown) || (!isTouchDevice && scene.input.activePointer.isDown)) {
           const worldPoint = scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
           
-          // Calculate direction vector to pointer
-          const dx = worldPoint.x - playerData.x;
-          const dy = worldPoint.y - playerData.y;
+          // Set movement target
+          this.movementTarget = {
+            x: worldPoint.x,
+            y: worldPoint.y
+          };
+        }
+        
+        // If we have a movement target, move towards it
+        if (this.movementTarget) {
+          // Calculate direction vector to target
+          const dx = this.movementTarget.x - playerData.x;
+          const dy = this.movementTarget.y - playerData.y;
           
-          // Normalize and scale
-          const length = Math.sqrt(dx * dx + dy * dy);
-          if (length > 0) {
-            // Use a slightly higher speed for touch to make it more responsive
-            const speed = isTouchDevice ? 6 : 5;
-            vx = (dx / length) * speed;
-            vy = (dy / length) * speed;
+          // Calculate distance to target
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          
+          // If we're close enough to the target, stop moving
+          if (distance < 5) {
+            this.movementTarget = null;
+            vx = 0;
+            vy = 0;
+          } else {
+            // Normalize and scale the direction vector
+            vx = (dx / distance) * this.movementSpeed;
+            vy = (dy / distance) * this.movementSpeed;
           }
         }
         
-        // Send movement to server
-        if (vx !== 0 || vy !== 0) {
+        const now = Date.now();
+        
+        // Send movement to server if changed or periodically
+        if ((Math.abs(vx) > 0.1 || Math.abs(vy) > 0.1) && 
+            (Math.abs(vx - this.lastMoveSent.vx) > 0.1 || 
+             Math.abs(vy - this.lastMoveSent.vy) > 0.1 || 
+             now - this.lastMoveSent.timestamp > 100)) {
+          
           this.socket.emit('move', { vx, vy });
+          
+          // Store last movement sent
+          this.lastMoveSent = { vx, vy, timestamp: now };
+          
+          // Add to pending inputs for client-side prediction
+          this.pendingInputs.push({ vx, vy, timestamp: now });
+          
+          // Apply movement immediately for client-side prediction
+          if (playerData) {
+            // Save last position for prediction
+            this.lastPosition = { x: playerData.x, y: playerData.y };
+            
+            // Update position
+            playerData.x += vx;
+            playerData.y += vy;
+            
+            // Add boundary checks
+            playerData.x = Math.max(playerData.radius, Math.min(this.worldSize.width - playerData.radius, playerData.x));
+            playerData.y = Math.max(playerData.radius, Math.min(this.worldSize.height - playerData.radius, playerData.y));
+          }
+        } else if (Math.abs(vx) < 0.1 && Math.abs(vy) < 0.1 && 
+                  (Math.abs(this.lastMoveSent.vx) > 0.1 || Math.abs(this.lastMoveSent.vy) > 0.1)) {
+          // Send stop command if we were moving before but now stopped
+          this.socket.emit('move', { vx: 0, vy: 0 });
+          this.lastMoveSent = { vx: 0, vy: 0, timestamp: now };
+          this.movementTarget = null; // Clear movement target when stopped
         }
         
         // Update food sprites

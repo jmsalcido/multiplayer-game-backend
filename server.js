@@ -66,6 +66,9 @@ const players = {};
 // Track which players need DB updates
 const playersNeedingUpdate = new Set();
 
+// Track last state sent to each player for delta compression
+const lastStateSent = {};
+
 // Socket.io connection handler
 io.on('connection', (socket) => {
   console.log(`New client connected: ${socket.id}`);
@@ -116,8 +119,15 @@ io.on('connection', (socket) => {
     // Mark player for DB update
     playersNeedingUpdate.add(socket.id);
     
+    // Initialize last state for this player
+    lastStateSent[socket.id] = {
+      players: {},
+      food: [],
+      timestamp: Date.now()
+    };
+    
     // Send immediate game state update to the new player
-    sendGameStateToPlayer(socket.id);
+    sendGameStateToPlayer(socket.id, true); // true = force full update
   });
 
   // Handle viewport size updates
@@ -156,6 +166,7 @@ io.on('connection', (socket) => {
         console.error(`Error updating session for disconnected player ${socket.id}:`, err);
       }
       delete players[socket.id];
+      delete lastStateSent[socket.id]; // Clean up last state
     }
   });
 });
@@ -299,8 +310,30 @@ function checkFoodCollisions() {
   }
 }
 
+// Helper function to calculate differences between objects
+function getObjectDiff(current, previous) {
+  if (!previous) return current;
+  
+  const diff = {};
+  let hasChanges = false;
+  
+  // Check each property in current object
+  for (const key in current) {
+    // Skip functions and complex objects that need special handling
+    if (typeof current[key] === 'function') continue;
+    
+    // For simple values and arrays, check if they've changed
+    if (JSON.stringify(current[key]) !== JSON.stringify(previous[key])) {
+      diff[key] = current[key];
+      hasChanges = true;
+    }
+  }
+  
+  return hasChanges ? diff : null;
+}
+
 // Send game state to a specific player
-function sendGameStateToPlayer(playerId) {
+function sendGameStateToPlayer(playerId, forceFullUpdate = false) {
   const player = players[playerId];
   if (!player) return;
   
@@ -385,17 +418,111 @@ function sendGameStateToPlayer(playerId) {
       isCurrentPlayer: p.id === playerId
     }));
   
-  // Send filtered game state to this player
-  io.to(playerId).emit('gameState', { 
-    players: nearbyPlayers, 
+  // Get the last state sent to this player
+  const lastState = lastStateSent[playerId] || { players: {}, food: [], timestamp: 0 };
+  const now = Date.now();
+  
+  // Prepare the new state
+  const newState = {
+    players: nearbyPlayers,
     food: nearbyFood,
-    fullPlayerCount: Object.keys(players).length, // Send total player count for UI
+    fullPlayerCount: Object.keys(players).length,
     gridCells: visibleGridCells,
     gridSize: GRID_SIZE,
     visibleCellsX: visibleCellsX,
     visibleCellsY: visibleCellsY,
-    leaderboard: leaderboardPlayers // Add global leaderboard data
-  });
+    leaderboard: leaderboardPlayers,
+    timestamp: now
+  };
+  
+  // If it's been more than 3 seconds or we're forcing a full update, send everything
+  const timeSinceLastFullUpdate = now - lastState.timestamp;
+  if (forceFullUpdate || timeSinceLastFullUpdate > 3000) {
+    // Send full state
+    io.to(playerId).emit('gameState', {
+      ...newState,
+      fullUpdate: true
+    });
+    
+    // Update last state
+    lastStateSent[playerId] = {
+      players: JSON.parse(JSON.stringify(nearbyPlayers)),
+      food: JSON.parse(JSON.stringify(nearbyFood)),
+      leaderboard: JSON.parse(JSON.stringify(leaderboardPlayers)),
+      timestamp: now
+    };
+    return;
+  }
+  
+  // Calculate delta for players
+  const playersDelta = {};
+  const removedPlayers = [];
+  
+  // Find changed and new players
+  for (const id in nearbyPlayers) {
+    if (!lastState.players[id] || 
+        lastState.players[id].x !== nearbyPlayers[id].x || 
+        lastState.players[id].y !== nearbyPlayers[id].y ||
+        lastState.players[id].radius !== nearbyPlayers[id].radius ||
+        lastState.players[id].score !== nearbyPlayers[id].score) {
+      playersDelta[id] = nearbyPlayers[id];
+    }
+  }
+  
+  // Find removed players
+  for (const id in lastState.players) {
+    if (!nearbyPlayers[id]) {
+      removedPlayers.push(id);
+    }
+  }
+  
+  // Calculate delta for food
+  const newFood = [];
+  const removedFood = [];
+  
+  // Find new food
+  const lastFoodIds = new Set(lastState.food.map(f => f.id));
+  for (const food of nearbyFood) {
+    if (!lastFoodIds.has(food.id)) {
+      newFood.push(food);
+    }
+  }
+  
+  // Find removed food
+  const currentFoodIds = new Set(nearbyFood.map(f => f.id));
+  for (const food of lastState.food) {
+    if (!currentFoodIds.has(food.id)) {
+      removedFood.push(food.id);
+    }
+  }
+  
+  // Only send update if there are changes
+  if (Object.keys(playersDelta).length > 0 || 
+      removedPlayers.length > 0 || 
+      newFood.length > 0 || 
+      removedFood.length > 0 ||
+      JSON.stringify(leaderboardPlayers) !== JSON.stringify(lastState.leaderboard)) {
+    
+    // Send delta update
+    io.to(playerId).emit('gameState', {
+      playersDelta,
+      removedPlayers,
+      newFood,
+      removedFood,
+      fullPlayerCount: Object.keys(players).length,
+      leaderboard: leaderboardPlayers,
+      timestamp: now,
+      fullUpdate: false
+    });
+    
+    // Update last state
+    lastStateSent[playerId] = {
+      players: JSON.parse(JSON.stringify(nearbyPlayers)),
+      food: JSON.parse(JSON.stringify(nearbyFood)),
+      leaderboard: JSON.parse(JSON.stringify(leaderboardPlayers)),
+      timestamp: now
+    };
+  }
 }
 
 // Update the game loop to include food spawning and collisions
@@ -509,6 +636,7 @@ function updateGameState() {
             updateEntityInGrid(p2.id, p2.x, p2.y, undefined, undefined, true);
             
             delete players[p2.id];
+            delete lastStateSent[p2.id]; // Clean up last state
             playersNeedingUpdate.add(id); // Mark absorber for update
           } else {
             absorb(p2, p1);
@@ -518,6 +646,7 @@ function updateGameState() {
             updateEntityInGrid(p1.id, p1.x, p1.y, undefined, undefined, true);
             
             delete players[p1.id];
+            delete lastStateSent[p1.id]; // Clean up last state
             playersNeedingUpdate.add(otherId); // Mark absorber for update
             break;
           }
