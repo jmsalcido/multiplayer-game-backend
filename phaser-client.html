@@ -182,6 +182,16 @@
         this.players = {};
         this.food = [];
         this.worldSize = { width: 2000, height: 2000 };
+        this.gridCells = {};
+        this.gridSize = 200;
+        
+        // Entity caching for smooth transitions
+        this.entityCache = {
+          players: {}, // Format: {id: {entity, lastSeen, alpha}}
+          food: {}     // Format: {id: {entity, lastSeen, alpha}}
+        };
+        this.cacheLifetime = 1000; // How long to keep entities in cache after they disappear (ms)
+        this.fadeSpeed = 0.1;      // How quickly entities fade in/out (alpha change per frame)
         
         // DOM Elements
         this.usernameForm = document.getElementById('username-form');
@@ -288,7 +298,7 @@
         this.updateConnectionStatus('Connected', '#4CAF50');
         this.gameStarted = true;
         
-        // Join the game with initial position
+        // Join the game with initial position and viewport size
         const startX = Math.random() * (this.worldSize.width - 100) + 50;
         const startY = Math.random() * (this.worldSize.height - 100) + 50;
         
@@ -296,7 +306,19 @@
           x: startX, 
           y: startY, 
           radius: this.playerSize, 
-          username: this.username 
+          username: this.username,
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight
+        });
+        
+        // Send viewport size when window is resized
+        window.addEventListener('resize', () => {
+          if (this.socket && this.gameStarted) {
+            this.socket.emit('updateViewport', {
+              width: window.innerWidth,
+              height: window.innerHeight
+            });
+          }
         });
         
         console.log('Join game request sent');
@@ -309,8 +331,62 @@
       
       handleGameState(state) {
         if (state.players && state.food) {
+          // Update the current game state
           this.players = state.players;
           this.food = state.food;
+          this.fullPlayerCount = state.fullPlayerCount || Object.keys(state.players).length;
+          this.gridCells = state.gridCells || {};
+          this.gridSize = state.gridSize || 200;
+          this.visibleCellsX = state.visibleCellsX || 0;
+          this.visibleCellsY = state.visibleCellsY || 0;
+          this.leaderboardData = state.leaderboard || [];
+          
+          // Mark all current entities as seen
+          const now = Date.now();
+          
+          // Update player cache
+          Object.keys(this.players).forEach(id => {
+            if (!this.entityCache.players[id]) {
+              // New player - add to cache with fade-in
+              this.entityCache.players[id] = {
+                entity: this.players[id],
+                lastSeen: now,
+                alpha: 0 // Start invisible and fade in
+              };
+            } else {
+              // Existing player - update data and mark as seen
+              this.entityCache.players[id].entity = this.players[id];
+              this.entityCache.players[id].lastSeen = now;
+              // If fading in, continue fade in, otherwise set to fully visible
+              if (this.entityCache.players[id].alpha < 1) {
+                // Continue fading in
+              } else {
+                this.entityCache.players[id].alpha = 1;
+              }
+            }
+          });
+          
+          // Update food cache
+          this.food.forEach(food => {
+            if (!this.entityCache.food[food.id]) {
+              // New food - add to cache with fade-in
+              this.entityCache.food[food.id] = {
+                entity: food,
+                lastSeen: now,
+                alpha: 0 // Start invisible and fade in
+              };
+            } else {
+              // Existing food - update data and mark as seen
+              this.entityCache.food[food.id].entity = food;
+              this.entityCache.food[food.id].lastSeen = now;
+              // If fading in, continue fade in, otherwise set to fully visible
+              if (this.entityCache.food[food.id].alpha < 1) {
+                // Continue fading in
+              } else {
+                this.entityCache.food[food.id].alpha = 1;
+              }
+            }
+          });
           
           // Update player data if exists
           if (this.players[this.socket.id]) {
@@ -344,24 +420,40 @@
       }
       
       updateLeaderboard() {
-        // Sort players by score
-        const sortedPlayers = Object.values(this.players)
-          .sort((a, b) => b.score - a.score)
-          .slice(0, 10);
-        
-        // Update leaderboard HTML
-        this.leaderboardContent.innerHTML = '';
-        sortedPlayers.forEach((player, index) => {
-          const playerName = player.username || 'Unknown';
-          const isCurrentPlayer = player.id === this.socket.id;
-          const playerEntry = document.createElement('div');
-          playerEntry.textContent = `${index + 1}. ${playerName}: ${Math.floor(player.score)}`;
-          if (isCurrentPlayer) {
-            playerEntry.style.fontWeight = 'bold';
-            playerEntry.style.color = '#4CAF50';
-          }
-          this.leaderboardContent.appendChild(playerEntry);
-        });
+        // Use server-provided leaderboard data
+        if (!this.leaderboardData || this.leaderboardData.length === 0) {
+          // Fallback to local calculation if server data is not available
+          const sortedPlayers = Object.values(this.players)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 10);
+          
+          // Update leaderboard HTML
+          this.leaderboardContent.innerHTML = '';
+          sortedPlayers.forEach((player, index) => {
+            const playerName = player.username || 'Unknown';
+            const isCurrentPlayer = player.id === this.socket.id;
+            const playerEntry = document.createElement('div');
+            playerEntry.textContent = `${index + 1}. ${playerName}: ${Math.floor(player.score)}`;
+            if (isCurrentPlayer) {
+              playerEntry.style.fontWeight = 'bold';
+              playerEntry.style.color = '#4CAF50';
+            }
+            this.leaderboardContent.appendChild(playerEntry);
+          });
+        } else {
+          // Use server-provided leaderboard data
+          this.leaderboardContent.innerHTML = '';
+          this.leaderboardData.forEach((player, index) => {
+            const playerName = player.username || 'Unknown';
+            const playerEntry = document.createElement('div');
+            playerEntry.textContent = `${index + 1}. ${playerName}: ${Math.floor(player.score)}`;
+            if (player.isCurrentPlayer) {
+              playerEntry.style.fontWeight = 'bold';
+              playerEntry.style.color = '#4CAF50';
+            }
+            this.leaderboardContent.appendChild(playerEntry);
+          });
+        }
       }
       
       gameOver() {
@@ -421,17 +513,17 @@
       preload() {
         const scene = this.phaserGame.scene.scenes[0];
         
-        // Load assets
+        // Load game assets from CDN
         scene.load.image('player', 'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/sprites/orb-blue.png');
-        scene.load.image('food', 'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/sprites/orb-green.png');
         scene.load.image('enemy', 'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/sprites/orb-red.png');
+        scene.load.image('food', 'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/sprites/orb-green.png');
         scene.load.image('background', 'https://raw.githubusercontent.com/photonstorm/phaser3-examples/master/public/assets/skies/space3.png');
       }
       
       create() {
         const scene = this.phaserGame.scene.scenes[0];
         
-        // Create game world
+        // Create main game container
         scene.gameContainer = scene.add.container(0, 0);
         
         // Create background
@@ -440,30 +532,38 @@
           .setAlpha(0.5);
         scene.gameContainer.add(scene.background);
         
-        // Create grid lines
-        const graphics = scene.add.graphics();
-        graphics.lineStyle(1, 0xcccccc, 0.3);
+        // Create static grid lines
+        const staticGridGraphics = scene.add.graphics();
+        staticGridGraphics.lineStyle(1, 0xcccccc, 0.3);
         
         // Draw vertical grid lines
         for (let x = 0; x < this.worldSize.width; x += 100) {
-          graphics.moveTo(x, 0);
-          graphics.lineTo(x, this.worldSize.height);
+          staticGridGraphics.moveTo(x, 0);
+          staticGridGraphics.lineTo(x, this.worldSize.height);
         }
         
         // Draw horizontal grid lines
         for (let y = 0; y < this.worldSize.height; y += 100) {
-          graphics.moveTo(0, y);
-          graphics.lineTo(this.worldSize.width, y);
+          staticGridGraphics.moveTo(0, y);
+          staticGridGraphics.lineTo(this.worldSize.width, y);
         }
         
         // Draw world boundary
-        graphics.lineStyle(3, 0xff0000, 0.8);
-        graphics.strokeRect(0, 0, this.worldSize.width, this.worldSize.height);
+        staticGridGraphics.lineStyle(3, 0xff0000, 0.8);
+        staticGridGraphics.strokeRect(0, 0, this.worldSize.width, this.worldSize.height);
         
-        graphics.strokePath();
-        scene.gameContainer.add(graphics);
+        staticGridGraphics.strokePath();
+        scene.gameContainer.add(staticGridGraphics);
         
-        // Create player sprite
+        // Create grid container for dynamic grid visualization
+        scene.gridContainer = scene.add.container(0, 0);
+        scene.gameContainer.add(scene.gridContainer);
+        
+        // Create containers for game objects
+        scene.foodContainer = scene.add.container(0, 0);
+        scene.otherPlayersContainer = scene.add.container(0, 0);
+        
+        // Create player container
         scene.playerContainer = scene.add.container(0, 0);
         scene.playerSprite = scene.add.sprite(0, 0, 'player');
         scene.playerSprite.setVisible(false); // Initially hidden until we have player data
@@ -477,10 +577,6 @@
           strokeThickness: 3
         }).setOrigin(0.5);
         scene.playerContainer.add(scene.playerNameText);
-        
-        // Create containers for game objects
-        scene.foodContainer = scene.add.container(0, 0);
-        scene.otherPlayersContainer = scene.add.container(0, 0);
         
         // Add containers to main game container
         scene.gameContainer.add(scene.foodContainer);
@@ -550,16 +646,29 @@
         // Center camera on player
         scene.cameras.main.centerOn(playerData.x, playerData.y);
         
+        // Draw grid cells if debug mode is on
+        this.updateGridVisualization(scene);
+        
         // Update debug info only in development mode
         if (!this.isProduction && this.debugMode && scene.debugText) {
           const playerCount = Object.keys(this.players).length;
           const otherPlayerCount = playerCount > 0 ? playerCount - 1 : 0;
+          const visiblePercent = this.fullPlayerCount > 0 ? 
+            Math.round((playerCount / this.fullPlayerCount) * 100) : 100;
+          const visibleCells = Object.keys(this.gridCells || {}).length;
+          const totalCells = 100; // 10x10 grid
+          const viewportCellsX = Math.ceil(window.innerWidth / this.gridSize) + 2;
+          const viewportCellsY = Math.ceil(window.innerHeight / this.gridSize) + 2;
           
           scene.debugText.setText(`
             FPS: ${Math.round(this.phaserGame.loop.actualFps)}
-            Players: ${playerCount} (You + ${otherPlayerCount})
+            Players: ${playerCount} visible of ${this.fullPlayerCount} total (${visiblePercent}%)
             Food: ${this.food.length}
+            Grid Cells: ${visibleCells} visible of ${totalCells} total
+            Viewport: ${window.innerWidth}x${window.innerHeight} (${viewportCellsX}x${viewportCellsY} cells)
+            Server Grid: ${this.visibleCellsX}x${this.visibleCellsY} cells
             Position: (${Math.round(playerData.x)}, ${Math.round(playerData.y)})
+            Cell: ${Math.floor(playerData.x/this.gridSize)},${Math.floor(playerData.y/this.gridSize)}
             Size: ${playerData.radius.toFixed(1)}
             Score: ${playerData.score}
             Socket ID: ${this.socket.id}
@@ -631,16 +740,45 @@
           bottom: camera.scrollY + camera.height + 100
         };
         
-        // Create new food sprites - only for food in or near the camera view
-        this.food.forEach(food => {
-          if (food && typeof food.x === 'number' && typeof food.y === 'number') {
-            // Only render food that's visible in the camera view (with some margin)
-            if (food.x >= cameraBounds.left && food.x <= cameraBounds.right && 
-                food.y >= cameraBounds.top && food.y <= cameraBounds.bottom) {
-              const sprite = scene.add.sprite(food.x, food.y, 'food');
-              sprite.setScale(food.radius / 15);
-              scene.foodContainer.add(sprite);
-            }
+        // Process cached food entities
+        const now = Date.now();
+        Object.keys(this.entityCache.food).forEach(id => {
+          const cachedFood = this.entityCache.food[id];
+          const food = cachedFood.entity;
+          
+          // Skip if no valid position
+          if (!food || typeof food.x !== 'number' || typeof food.y !== 'number') {
+            return;
+          }
+          
+          // Check if food is in view
+          const isInView = food.x >= cameraBounds.left && food.x <= cameraBounds.right && 
+                          food.y >= cameraBounds.top && food.y <= cameraBounds.bottom;
+          
+          // Check if food is still in the current game state
+          const isActive = this.food.some(f => f.id === id);
+          
+          // Update alpha based on visibility
+          if (isActive && isInView) {
+            // Food is active and in view - fade in if needed
+            cachedFood.alpha = Math.min(1, cachedFood.alpha + this.fadeSpeed);
+          } else {
+            // Food is not active or not in view - fade out
+            cachedFood.alpha = Math.max(0, cachedFood.alpha - this.fadeSpeed);
+          }
+          
+          // Only render if has some visibility
+          if (cachedFood.alpha > 0) {
+            // Create food sprite with appropriate alpha
+            const sprite = scene.add.sprite(food.x, food.y, 'food');
+            sprite.setScale(food.radius / 15);
+            sprite.setAlpha(cachedFood.alpha);
+            scene.foodContainer.add(sprite);
+          }
+          
+          // Remove from cache if it's been gone too long
+          if (!isActive && now - cachedFood.lastSeen > this.cacheLifetime && cachedFood.alpha <= 0) {
+            delete this.entityCache.food[id];
           }
         });
       }
@@ -658,28 +796,48 @@
           bottom: camera.scrollY + camera.height + 200
         };
         
-        // Update or create sprites for current players
-        Object.keys(this.players).forEach(id => {
-          if (id === this.socket.id) return; // Skip the current player
+        // Process cached player entities
+        const now = Date.now();
+        Object.keys(this.entityCache.players).forEach(id => {
+          // Skip the current player
+          if (id === this.socket.id) return;
           
-          const player = this.players[id];
+          const cachedPlayer = this.entityCache.players[id];
+          const player = cachedPlayer.entity;
+          
+          // Skip if no valid position
           if (!player || typeof player.x !== 'number' || typeof player.y !== 'number') {
             return;
           }
           
-          // Only render players that are visible in the camera view (with some margin)
-          if (player.x >= cameraBounds.left && player.x <= cameraBounds.right && 
-              player.y >= cameraBounds.top && player.y <= cameraBounds.bottom) {
-            
+          // Check if player is in view
+          const isInView = player.x >= cameraBounds.left && player.x <= cameraBounds.right && 
+                          player.y >= cameraBounds.top && player.y <= cameraBounds.bottom;
+          
+          // Check if player is still in the current game state
+          const isActive = this.players[id] !== undefined;
+          
+          // Update alpha based on visibility
+          if (isActive && isInView) {
+            // Player is active and in view - fade in if needed
+            cachedPlayer.alpha = Math.min(1, cachedPlayer.alpha + this.fadeSpeed);
+          } else {
+            // Player is not active or not in view - fade out
+            cachedPlayer.alpha = Math.max(0, cachedPlayer.alpha - this.fadeSpeed);
+          }
+          
+          // Only render if has some visibility
+          if (cachedPlayer.alpha > 0) {
             // Create player container
             const playerContainer = scene.add.container(player.x, player.y);
             
-            // Create player sprite
+            // Create player sprite with appropriate alpha
             const playerSprite = scene.add.sprite(0, 0, 'enemy');
-            playerSprite.setScale(player.radius / 25); // Changed from 50 to 25 for consistent scaling
+            playerSprite.setScale(player.radius / 25);
+            playerSprite.setAlpha(cachedPlayer.alpha);
             playerContainer.add(playerSprite);
             
-            // Create player name text
+            // Create player name text with appropriate alpha
             const playerText = scene.add.text(
               0,
               -player.radius - 10,
@@ -691,12 +849,73 @@
                 strokeThickness: 3
               }
             ).setOrigin(0.5);
+            playerText.setAlpha(cachedPlayer.alpha);
             playerContainer.add(playerText);
             
             // Add to container
             scene.otherPlayersContainer.add(playerContainer);
           }
+          
+          // Remove from cache if it's been gone too long
+          if (!isActive && now - cachedPlayer.lastSeen > this.cacheLifetime && cachedPlayer.alpha <= 0) {
+            delete this.entityCache.players[id];
+          }
         });
+      }
+      
+      // Add a new method to update grid visualization
+      updateGridVisualization(scene) {
+        // Clear previous grid visualization
+        scene.gridContainer.removeAll(true);
+        
+        // Only draw grid in debug mode
+        if (!this.debugMode) return;
+        
+        // Draw grid cells
+        for (const cellKey in this.gridCells) {
+          const cell = this.gridCells[cellKey];
+          
+          // Create grid cell rectangle
+          const graphics = scene.add.graphics();
+          
+          // Set style based on cell contents
+          if (cell.playerCount > 0 && cell.foodCount > 0) {
+            // Both players and food
+            graphics.lineStyle(2, 0xffff00, 0.5);
+          } else if (cell.playerCount > 0) {
+            // Only players
+            graphics.lineStyle(2, 0xff0000, 0.5);
+          } else if (cell.foodCount > 0) {
+            // Only food
+            graphics.lineStyle(2, 0x00ff00, 0.5);
+          } else {
+            // Empty cell
+            graphics.lineStyle(2, 0xffffff, 0.2);
+          }
+          
+          // Draw rectangle
+          graphics.strokeRect(cell.x, cell.y, cell.width, cell.height);
+          
+          // Add cell info text if it has entities
+          if (cell.playerCount > 0 || cell.foodCount > 0) {
+            const text = scene.add.text(
+              cell.x + cell.width / 2,
+              cell.y + cell.height / 2,
+              `P:${cell.playerCount}\nF:${cell.foodCount}`,
+              {
+                fontSize: '12px',
+                fill: '#ffffff',
+                align: 'center',
+                stroke: '#000000',
+                strokeThickness: 2
+              }
+            ).setOrigin(0.5);
+            
+            scene.gridContainer.add(text);
+          }
+          
+          scene.gridContainer.add(graphics);
+        }
       }
     }
     

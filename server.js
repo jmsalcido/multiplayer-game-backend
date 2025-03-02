@@ -108,7 +108,9 @@ io.on('connection', (socket) => {
       radius: data.radius || 20, // Player size
       score: 0,
       username: data.username || 'Player',
-      lastUpdate: Date.now()    // Track last update time
+      lastUpdate: Date.now(),   // Track last update time
+      viewportWidth: data.viewportWidth || 1920,  // Store viewport width
+      viewportHeight: data.viewportHeight || 1080 // Store viewport height
     };
     
     // Mark player for DB update
@@ -116,6 +118,16 @@ io.on('connection', (socket) => {
     
     // Send immediate game state update to the new player
     sendGameStateToPlayer(socket.id);
+  });
+
+  // Handle viewport size updates
+  socket.on('updateViewport', (data) => {
+    if (players[socket.id]) {
+      // Update the player's viewport size
+      players[socket.id].viewportWidth = data.width || players[socket.id].viewportWidth;
+      players[socket.id].viewportHeight = data.height || players[socket.id].viewportHeight;
+      console.log(`Player ${socket.id} updated viewport: ${data.width}x${data.height}`);
+    }
   });
 
   // Listen for movement commands
@@ -292,22 +304,45 @@ function sendGameStateToPlayer(playerId) {
   const player = players[playerId];
   if (!player) return;
   
-  // Get neighboring cells for this player
-  const neighborCells = getNeighboringCells(player.x, player.y);
+  // Get viewport size from player data (default to reasonable values if not provided)
+  const viewportWidth = player.viewportWidth || 1920;
+  const viewportHeight = player.viewportHeight || 1080;
+  
+  // Calculate how many grid cells should be visible based on viewport size
+  // Add a buffer of 1 cell to ensure smooth transitions
+  const visibleCellsX = Math.ceil(viewportWidth / GRID_SIZE) + 2;
+  const visibleCellsY = Math.ceil(viewportHeight / GRID_SIZE) + 2;
+  const maxVisibleDistance = Math.max(visibleCellsX, visibleCellsY);
+  
+  // Get player's current cell
+  const playerCellX = Math.floor(player.x / GRID_SIZE);
+  const playerCellY = Math.floor(player.y / GRID_SIZE);
+  
+  // Collect nearby cells based on viewport size
+  const neighborCells = [];
   const nearbyPlayerIds = new Set();
   const nearbyFoodIds = new Set();
   
-  // Collect entity IDs from neighboring cells
-  neighborCells.forEach(cellKey => {
-    if (grid[cellKey]) {
-      grid[cellKey].players.forEach(id => {
-        nearbyPlayerIds.add(id);
-      });
-      grid[cellKey].food.forEach(id => {
-        nearbyFoodIds.add(id);
-      });
+  // Expand search radius based on viewport size
+  for (let i = -maxVisibleDistance; i <= maxVisibleDistance; i++) {
+    for (let j = -maxVisibleDistance; j <= maxVisibleDistance; j++) {
+      // Skip cells that are too far (outside the visible area)
+      if (Math.abs(i) > visibleCellsX || Math.abs(j) > visibleCellsY) continue;
+      
+      const neighborKey = `${playerCellX + i},${playerCellY + j}`;
+      if (grid[neighborKey]) {
+        neighborCells.push(neighborKey);
+        
+        // Collect entity IDs from this cell
+        grid[neighborKey].players.forEach(id => {
+          nearbyPlayerIds.add(id);
+        });
+        grid[neighborKey].food.forEach(id => {
+          nearbyFoodIds.add(id);
+        });
+      }
     }
-  });
+  }
   
   // Always include the player themselves
   nearbyPlayerIds.add(playerId);
@@ -322,11 +357,44 @@ function sendGameStateToPlayer(playerId) {
   
   const nearbyFood = foodPellets.filter(food => nearbyFoodIds.has(food.id));
   
+  // Create grid cell information for visualization
+  const visibleGridCells = {};
+  neighborCells.forEach(cellKey => {
+    if (grid[cellKey]) {
+      const [cellX, cellY] = cellKey.split(',').map(Number);
+      visibleGridCells[cellKey] = {
+        x: cellX * GRID_SIZE,
+        y: cellY * GRID_SIZE,
+        width: GRID_SIZE,
+        height: GRID_SIZE,
+        playerCount: grid[cellKey].players.size,
+        foodCount: grid[cellKey].food.size
+      };
+    }
+  });
+  
+  // Create global leaderboard data (top 10 players by score)
+  const allPlayers = Object.values(players);
+  const leaderboardPlayers = allPlayers
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 10)
+    .map(p => ({
+      id: p.id,
+      username: p.username,
+      score: p.score,
+      isCurrentPlayer: p.id === playerId
+    }));
+  
   // Send filtered game state to this player
   io.to(playerId).emit('gameState', { 
     players: nearbyPlayers, 
     food: nearbyFood,
-    fullPlayerCount: Object.keys(players).length // Send total player count for UI
+    fullPlayerCount: Object.keys(players).length, // Send total player count for UI
+    gridCells: visibleGridCells,
+    gridSize: GRID_SIZE,
+    visibleCellsX: visibleCellsX,
+    visibleCellsY: visibleCellsY,
+    leaderboard: leaderboardPlayers // Add global leaderboard data
   });
 }
 
@@ -337,6 +405,32 @@ setInterval(() => {
     spawnFood();          // Spawn food pellets if below MAX_FOOD
     updateGameState();    // Update player positions and collisions (players colliding with players)
     checkFoodCollisions(); // Check and handle collisions between players and food
+    
+    // Log spatial partitioning stats every 5 seconds
+    const now = Date.now();
+    if (!global.lastStatsTime || now - global.lastStatsTime > 5000) {
+      global.lastStatsTime = now;
+      
+      // Count entities in grid
+      let totalPlayersInGrid = 0;
+      let totalFoodInGrid = 0;
+      let nonEmptyCells = 0;
+      
+      for (const cellKey in grid) {
+        const cell = grid[cellKey];
+        if (cell.players.size > 0 || cell.food.size > 0) {
+          nonEmptyCells++;
+          totalPlayersInGrid += cell.players.size;
+          totalFoodInGrid += cell.food.size;
+        }
+      }
+      
+      console.log(`--- Spatial Partitioning Stats ---`);
+      console.log(`Total players: ${Object.keys(players).length}, In grid: ${totalPlayersInGrid}`);
+      console.log(`Total food: ${foodPellets.length}, In grid: ${totalFoodInGrid}`);
+      console.log(`Non-empty cells: ${nonEmptyCells} of ${Object.keys(grid).length}`);
+      console.log(`----------------------------------`);
+    }
     
     // Update each player's grid position and send them relevant game state
     for (let id in players) {
