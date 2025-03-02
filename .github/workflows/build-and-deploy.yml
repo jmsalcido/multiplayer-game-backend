@@ -35,8 +35,24 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
+      - name: Debug backend URL
+        run: |
+          echo "Backend URL length: ${#BACKEND_URL}"
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+
       - name: Replace backend URL placeholder in phaser-client.html
-        run: sed -i "s|__BACKEND_URL__|${{ secrets.BACKEND_URL }}|g" phaser-client.html
+        run: |
+          # Print the first few lines of the file before replacement
+          echo "Before replacement:"
+          head -n 170 phaser-client.html | grep backendUrl
+          
+          # Replace the placeholder
+          sed -i "s|__BACKEND_URL__|${{ secrets.BACKEND_URL }}|g" phaser-client.html
+          
+          # Print the first few lines of the file after replacement
+          echo "After replacement:"
+          head -n 170 phaser-client.html | grep backendUrl
 
       - name: Deploy phaser-client.html to S3
         run: aws s3 cp phaser-client.html s3://${{ secrets.S3_BUCKET }}/phaser-client.html
