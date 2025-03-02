@@ -159,7 +159,10 @@
     class Game {
       constructor() {
         // Configuration
-        this.backendUrl = window.location.hostname === 'localhost' ? "http://localhost:3000" : window.location.origin;
+        this.backendUrl = "__BACKEND_URL__" !== "__BACKEND_URL__" ? "__BACKEND_URL__" : 
+                         (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? 
+                          "http://localhost:3000" : 
+                          "http://localhost:3000");  // Fallback to localhost - BACKEND_URL placeholder was not replaced during deployment
         this.socket = null;
         this.username = '';
         this.gameStarted = false;

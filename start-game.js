@@ -21,7 +21,7 @@ function checkServerRunning(retries = 0, maxRetries = 10) {
     if (res.statusCode === 200) {
       console.log('Server is running. Opening game client...');
       // Open the Phaser client in the default browser
-      const clientPath = path.join('file://', __dirname, 'phaser-client.html');
+      const clientPath = path.join('http://localhost:3000', 'phaser-client.html');
       open(clientPath);
     }
   }).on('error', (err) => {
