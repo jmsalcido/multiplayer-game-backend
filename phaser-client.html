@@ -165,17 +165,6 @@
           // Local development fallback
           if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
             this.backendUrl = "http://localhost:3000";
-          } else {
-            // Production fallback - this should not happen if deployment is correct
-            console.error("Backend URL placeholder was not replaced during deployment!");
-            this.backendUrl = "http://localhost:3000";
-          }
-        } else {
-          // Ensure the URL has a protocol
-          if (!this.backendUrl.startsWith('http://') && !this.backendUrl.startsWith('https://')) {
-            // If we're on HTTPS, use HTTPS for the backend too to avoid mixed content
-            const protocol = window.location.protocol === 'https:' ? 'https://' : 'http://';
-            this.backendUrl = protocol + this.backendUrl;
           }
         }
         this.socket = null;
